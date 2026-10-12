@@ -1,2 +1,10 @@
 /CA
 /Caminata aleatoria1v.py
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Entorno local de pyenv (el nombre del virtualenv depende de cada máquina)
+.python-version
