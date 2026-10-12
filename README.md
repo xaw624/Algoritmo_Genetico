@@ -1,16 +1,74 @@
-# Caminata Aleatoria Visual Interactiva
+# Simulador de Algoritmo Genético 1D
 
-Una aplicación web interactiva construida con [Streamlit](https://streamlit.io/) para visualizar el comportamiento de una caminata aleatoria sobre funciones matemáticas personalizadas.
+Aplicación web interactiva construida con [Streamlit](https://streamlit.io/) que minimiza una función matemática `f(x)` en un intervalo `[a, b]` mediante un **algoritmo genético** y anima la evolución de la población generación por generación.
 
 ## 🚀 Características
 
-- Visualización dinámica de una caminata aleatoria de funciones de una variable
-- Ingreso de funciones matemáticas personalizadas `f(x)`.
-- Control del rango de búsqueda, punto inicial y número de pasos.
+- Ingreso de funciones personalizadas `f(x)` (`sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `abs`, `pi`), validadas de forma segura.
+- 12 ejemplos rápidos: funciones multimodales, con mínimos en el borde, discontinuas en la derivada, etc.
+- Control de todos los parámetros del AG: población, generaciones, `pc`, `pm`, `σ` relativo, enfriamiento de `σ`, tamaño del torneo y semilla.
+- Animación de la población y del mejor individuo histórico, con un control para revisar cualquier generación.
+- Gráfica de convergencia del mejor valor encontrado.
+- Explicación teórica del método (en LaTeX) dentro de la app.
 
 ## ⚙️ Instalación
+
+Requiere **Python 3.11 o superior**.
 
 1. Clona este repositorio:
 
    ```bash
-   git clone https://github.com/xaw624/Caminata-Aleatoria.git
+   git clone https://github.com/xaw624/Algoritmo_Genetico.git
+   cd Algoritmo_Genetico
+   ```
+
+2. Crea un entorno virtual. Con [pyenv](https://github.com/pyenv/pyenv) y `pyenv-virtualenv`:
+
+   ```bash
+   pyenv virtualenv 3.12.14 algoritmo-genetico-env
+   pyenv local algoritmo-genetico-env
+   ```
+
+   O con `venv`:
+
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate   # En Windows: .venv\Scripts\activate
+   ```
+
+3. Instala las dependencias:
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+## ▶️ Uso
+
+```bash
+streamlit run app.py
+```
+
+La app se abre en `http://localhost:8501`.
+
+En producción está publicada en **https://genetico.streamlytics.stream** como servicio `streamlit@genetico` (ver [DOCUMENTACION.md §9](DOCUMENTACION.md)).
+
+## 🧪 Pruebas
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+## 📁 Estructura
+
+| Archivo | Descripción |
+|---|---|
+| `app.py` | Interfaz de Streamlit |
+| `AG_procesamiento.py` | Algoritmo genético y validación/parseo de expresiones |
+| `tests/` | Pruebas del algoritmo y de la app (`pytest`) |
+| `deploy/` | Límites del servicio systemd en producción |
+| `DOCUMENTACION.md` | Documentación técnica detallada (incluye el despliegue en producción) |
+
+## 📄 Licencia
+
+[MIT](LICENSE.txt) © 2025 Jesús Uriel Moguel Bautista
