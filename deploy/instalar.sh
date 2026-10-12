@@ -32,7 +32,7 @@ paso "Comprobando el entorno"
 [[ "$REPO" == "/home/ubuntu/Algoritmo_Genetico" ]] \
     || error "El repo debe estar en /home/ubuntu/Algoritmo_Genetico (está en $REPO)."
 command -v systemctl >/dev/null || error "Se necesita systemd."
-sudo -v || error "Se necesita sudo."
+sudo -n true 2>/dev/null || error "Se necesita sudo sin contraseña (en EC2 el usuario ubuntu ya lo tiene)."
 
 # En un servidor compartido la plantilla puede existir con otra configuración
 # (otro WorkingDirectory): reemplazarla afectaría a las demás apps.
