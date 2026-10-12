@@ -8,3 +8,6 @@ __pycache__/
 
 # Entorno local de pyenv (el nombre del virtualenv depende de cada máquina)
 .python-version
+
+# Entorno virtual creado por deploy/instalar.sh
+.venv/

@@ -1,0 +1,14 @@
+# Configuración de Streamlit para esta app.
+# Se lee cuando Streamlit se ejecuta desde la carpeta del repo
+# (desarrollo local y el servicio de deploy/, cuyo WorkingDirectory es el repo).
+
+[server]
+# Ping periódico para que Cloudflare no cierre el websocket por inactividad
+websocketPingInterval = 30
+
+[theme]
+primaryColor = "#4CAF50"
+backgroundColor = "#F0F7F4"
+secondaryBackgroundColor = "#C8E6C9"
+textColor = "#263238"
+font = "sans serif"

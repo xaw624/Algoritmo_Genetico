@@ -1,0 +1,25 @@
+# Plantilla systemd: una instancia por app -> streamlit@<nombre>
+# Lee las variables de /etc/streamlit/<nombre>.env
+# Destino: /etc/systemd/system/streamlit@.service
+[Unit]
+Description=Streamlit - %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+
+EnvironmentFile=/etc/streamlit/%i.env
+# El repo: así Streamlit lee .streamlit/config.toml de esta app
+WorkingDirectory=/home/ubuntu/Algoritmo_Genetico
+ExecStart=/usr/local/bin/run_streamlit.sh
+
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
