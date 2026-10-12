@@ -66,7 +66,7 @@ pytest
 | `app.py` | Interfaz de Streamlit |
 | `AG_procesamiento.py` | Algoritmo genético y validación/parseo de expresiones |
 | `tests/` | Pruebas del algoritmo y de la app (`pytest`) |
-| `deploy/` | Límites del servicio systemd en producción |
+| `deploy/` | Instalación en un servidor dedicado (AWS EC2): script, servicio systemd y límites |
 | `DOCUMENTACION.md` | Documentación técnica detallada (incluye el despliegue en producción) |
 
 ## 📄 Licencia

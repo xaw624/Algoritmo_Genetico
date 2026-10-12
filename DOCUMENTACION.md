@@ -14,8 +14,8 @@ Aplicación web en [Streamlit](https://streamlit.io/) que minimiza una función 
 | `requirements.txt` | Dependencias directas de la app, fijadas a versiones probadas (UTF-8). |
 | `requirements-dev.txt` | `requirements.txt` + `pytest`. |
 | `.gitattributes` | `* text=auto`: normaliza finales de línea a LF en el repo. |
-| `deploy/genetico.env` | Variables del servicio systemd `streamlit@genetico` (ver §9). |
-| `deploy/limites.conf` | Drop-in de systemd con los límites de CPU/memoria del servicio en producción (ver §9). |
+| `deploy/` | Instalación en un servidor dedicado: script `instalar.sh`, plantilla systemd, lanzador, variables y límites (ver §9). |
+| `.streamlit/config.toml` | Tema y ping del websocket. Se aplica al correr Streamlit desde la carpeta del repo. |
 | `Caminata aleatoria1v.py` | Versión antigua de escritorio en Tkinter (caminata aleatoria). Está en `.gitignore` y no la usa la app web. |
 | `.python-version` | Lo genera `pyenv local`. Está en `.gitignore` porque el nombre del entorno depende de cada máquina. |
 
@@ -235,126 +235,112 @@ Ninguna es un error; son mejoras opcionales:
 
 ## 9. Despliegue en producción
 
-Publicada en **https://genetico.streamlytics.stream**. Cada app corre como un servicio systemd que escucha solo en `127.0.0.1`. Un **Cloudflare Tunnel** la expone con HTTPS sin abrir puertos en el servidor.
+La app corre como servicio systemd `streamlit@genetico`, que escucha solo en `127.0.0.1:8516`. Un **Cloudflare Tunnel** la publica con HTTPS en **https://genetico.streamlytics.stream** sin abrir puertos de entrada. El destino es un servidor dedicado: una instancia **AWS EC2** con Ubuntu Server 24.04 LTS.
 
 ```mermaid
 flowchart LR
     U[Navegador] -->|HTTPS| CF[Cloudflare<br/>DNS genetico → túnel, con proxy]
-    CF -->|túnel| CD[cloudflared<br/>regla de ingress]
+    CF -->|túnel saliente| CD[cloudflared<br/>en la instancia]
     CD -->|http://127.0.0.1:8516| S[streamlit@genetico]
-    S --> A[app.py]
+    S --> A[app.py + .venv]
 ```
 
-### 9.1 Piezas
+### 9.1 Archivos
 
-| Pieza | En el servidor | Fuente |
+| Archivo | Destino en el servidor | Función |
 |---|---|---|
-| Plantilla systemd (común a todas las apps) | `/etc/systemd/system/streamlit@.service` | ver abajo |
-| Lanzador (común) | `/usr/local/bin/run_streamlit.sh` | ver abajo |
-| Variables del servicio | `/etc/streamlit/genetico.env` (`root:ubuntu`, `640`) | `deploy/genetico.env` |
-| Límites de CPU/memoria | `/etc/systemd/system/streamlit@genetico.service.d/limites.conf` | `deploy/limites.conf` |
-| Regla del túnel | `/etc/cloudflared/config.yml` | `genetico.streamlytics.stream → http://127.0.0.1:8516` |
-| DNS | Cloudflare | `genetico` → túnel del servidor, con proxy |
+| `deploy/instalar.sh` | — | Instala todo: paquetes, swap, `.venv`, servicio y, opcionalmente, `cloudflared`. Se puede volver a ejecutar para actualizar. |
+| `deploy/streamlit@.service` | `/etc/systemd/system/` | Plantilla systemd. Su `WorkingDirectory` es el repo, para que se lea `.streamlit/config.toml`. |
+| `deploy/run_streamlit.sh` | `/usr/local/bin/` | Lanzador. Fija `--server.address=127.0.0.1`. |
+| `deploy/genetico.env` | `/etc/streamlit/genetico.env` (`root:ubuntu`, `640`) | Python de `.venv`, `app.py`, puerto 8516 y `--client.showErrorDetails=none` (no muestra tracebacks a los visitantes). |
+| `deploy/limites.conf` | `/etc/systemd/system/streamlit@genetico.service.d/` | Como máximo 1 núcleo, `MemoryHigh=400M`, `MemoryMax=512M`. |
+| `.streamlit/config.toml` | (en el repo) | Tema y `websocketPingInterval = 30`, para que Cloudflare no cierre el websocket. |
 
-Plantilla y lanzador. Son comunes a todas las apps; si el servidor nuevo no los tiene, hay que crearlos:
+> `instalar.sh` se niega a correr si ya existe una plantilla `streamlit@.service` distinta (un servidor compartido con otras apps), para no afectarlas.
 
-```ini
-# /etc/systemd/system/streamlit@.service
-[Unit]
-Description=Streamlit - %i
-After=network-online.target
-Wants=network-online.target
+### 9.2 Crear la instancia EC2 (consola de AWS)
 
-[Service]
-Type=simple
-User=ubuntu
-Group=ubuntu
-EnvironmentFile=/etc/streamlit/%i.env
-WorkingDirectory=/home/ubuntu/<carpeta con .streamlit/config.toml>
-ExecStart=/usr/local/bin/run_streamlit.sh
-Restart=always
-RestartSec=3
-StandardOutput=journal
-StandardError=journal
+Región **us-east-2 (Ohio)**. *EC2 → Lanzar instancia*:
 
-[Install]
-WantedBy=multi-user.target
-```
+| Campo | Valor |
+|---|---|
+| Nombre | `genetico` |
+| Imagen (AMI) | **Ubuntu Server 24.04 LTS**, arquitectura **64 bits (Arm)**. El script requiere Python 3.11–3.13; versiones más nuevas de Ubuntu traen un Python para el que no hay builds de las dependencias fijadas. |
+| Tipo de instancia | `t4g.micro` (2 vCPU, 1 GB) |
+| Par de claves | No hace falta si te conectas con EC2 Instance Connect. |
+| Red | VPC predeterminada, con *Asignar IP pública automáticamente* **habilitado**: la instancia necesita salir a Internet. |
+| Grupo de seguridad | Uno nuevo, con **una sola regla de entrada**: SSH (22) con origen la lista de prefijos `com.amazonaws.us-east-2.ec2-instance-connect`, para conectarte desde la consola. El tráfico web entra por el túnel, así que no hace falta abrir nada más. |
+| Almacenamiento | 8–20 GB gp3 |
+| Detalles avanzados → *Especificación de crédito* | **Estándar**: si se agotan los créditos de CPU, la instancia se ralentiza en lugar de cobrar extra. |
+
+### 9.3 Instalar la app
+
+*Instancia → Conectar → EC2 Instance Connect → Conectar* abre una terminal en el navegador como el usuario `ubuntu`:
 
 ```bash
-#!/usr/bin/env bash
-# /usr/local/bin/run_streamlit.sh  (root:root, 755)
-set -euo pipefail
-exec "${PYTHON_BIN}" -m streamlit run "${APP_FILE}" \
-  --server.port="${PORT}" \
-  --server.address=127.0.0.1 \
-  --server.headless=true \
-  --browser.gatherUsageStats=false \
-  ${EXTRA_ARGS:-}
-```
-
-> **`WorkingDirectory` y el tema:** Streamlit lee `.streamlit/config.toml` de la carpeta de trabajo. Hoy la plantilla apunta a la carpeta compartida de las webs de Streamlytics, así que el simulador hereda su tema y `showErrorDetails = "none"`, que oculta los tracebacks en producción. Si en el servidor nuevo no existe esa configuración, conviene crear al menos `[client] showErrorDetails = "none"`.
-
-### 9.2 Instalar en un servidor nuevo
-
-Las rutas de `deploy/genetico.env` suponen el usuario `ubuntu` y el repo en `/home/ubuntu/Algoritmo_Genetico`. Si cambian, hay que ajustarlas.
-
-```bash
-# 1) Código y entorno
 git clone https://github.com/xaw624/Algoritmo_Genetico.git ~/Algoritmo_Genetico
-pyenv install -s 3.12.14
-pyenv virtualenv 3.12.14 algoritmo-genetico-env
-~/.pyenv/versions/algoritmo-genetico-env/bin/python -m pip install -r ~/Algoritmo_Genetico/requirements.txt
-
-# 2) Servicio (requiere la plantilla y el lanzador de §9.1)
-cd ~/Algoritmo_Genetico
-sudo install -D -m 0640 -o root -g ubuntu deploy/genetico.env /etc/streamlit/genetico.env
-sudo install -D -m 0644 deploy/limites.conf /etc/systemd/system/streamlit@genetico.service.d/limites.conf
-sudo systemctl daemon-reload
-sudo systemctl enable --now streamlit@genetico
-curl http://127.0.0.1:8516/_stcore/health            # → ok
+bash ~/Algoritmo_Genetico/deploy/instalar.sh
 ```
 
-3. **Túnel:** agregar en `/etc/cloudflared/config.yml`, antes de la regla final `http_status:404`:
+Tarda unos minutos, sobre todo por `pip`. Debe terminar con `La app responde en http://127.0.0.1:8516`.
 
-   ```yaml
-     - hostname: genetico.streamlytics.stream
-       service: http://127.0.0.1:8516
+### 9.4 Conectar el Cloudflare Tunnel
+
+El servidor usa su propio túnel:
+
+1. En Cloudflare: *Zero Trust → Networks → Tunnels → Create a tunnel* → tipo **Cloudflared** → nombre `genetico-aws`.
+2. En *Install and run a connector*, elige Debian / arm64 y copia el **token**: la cadena larga que aparece después de `service install`. Es una credencial: no la compartas ni la guardes en el repo.
+3. En la instancia, ejecuta el comando **empezando con un espacio**; así no queda en el historial de bash:
+
+   ```bash
+    CLOUDFLARE_TUNNEL_TOKEN='<token>' bash ~/Algoritmo_Genetico/deploy/instalar.sh
    ```
 
-   Validar con `sudo cloudflared tunnel --config /etc/cloudflared/config.yml ingress rule https://genetico.streamlytics.stream` y aplicar con `sudo systemctl restart cloudflared`. Ese reinicio corta unos segundos todas las webs del túnel.
-4. **DNS:** el registro `genetico` en Cloudflare debe apuntar al túnel del **servidor nuevo** (CNAME `<id-del-túnel>.cfargotunnel.com`, con proxy). Si se cambia de túnel, el registro viejo sigue enviando el tráfico al servidor anterior.
-5. **Retirar la app del servidor anterior** (ver “Quitar el despliegue” en §9.3).
+   El túnel debe aparecer como *Healthy* en Cloudflare.
+4. **Probar con un hostname temporal.** En el túnel, *Public hostname* (o *Published application routes*): `genetico-aws.streamlytics.stream` → tipo `HTTP` → `127.0.0.1:8516`. Ábrelo en el navegador y ejecuta una simulación.
+5. **Pasar el dominio definitivo:**
+   - En DNS, borra el registro `genetico` que apunta al túnel anterior.
+   - En el túnel nuevo, agrega `genetico.streamlytics.stream` → `http://127.0.0.1:8516`. Cloudflare crea el registro DNS.
+   - Entre esos dos pasos el sitio queda fuera unos segundos.
+   - Al final, borra el hostname temporal.
 
-### 9.3 Operación
+### 9.5 Retirar la app del servidor anterior
 
-```bash
-systemctl status streamlit@genetico --no-pager -l     # estado, memoria y límites
-journalctl -u streamlit@genetico -f                    # logs en vivo
-curl http://127.0.0.1:8516/_stcore/health              # salud local → "ok"
-sudo systemctl restart streamlit@genetico              # aplicar cambios de código o del .env
-```
-
-**Actualizar el código:** el servicio ejecuta directamente la carpeta del repo. Para publicar cambios: `git pull`, instalar dependencias si cambiaron (`~/.pyenv/versions/algoritmo-genetico-env/bin/python -m pip install -r requirements.txt`), `pytest` y `sudo systemctl restart streamlit@genetico`.
-
-**Cambiar los límites:** editar `deploy/limites.conf` y luego:
-
-```bash
-sudo install -D -m 0644 deploy/limites.conf /etc/systemd/system/streamlit@genetico.service.d/limites.conf
-sudo systemctl daemon-reload && sudo systemctl restart streamlit@genetico
-```
-
-**Quitar el despliegue:**
+Cuando el dominio ya responda desde AWS, ejecuta en el servidor anterior:
 
 ```bash
 sudo systemctl disable --now streamlit@genetico
 sudo rm -r /etc/streamlit/genetico.env /etc/systemd/system/streamlit@genetico.service.d
 sudo systemctl daemon-reload
-# y quitar la regla de genetico en /etc/cloudflared/config.yml + sudo systemctl restart cloudflared
 ```
 
-### 9.4 Notas
+La regla de `genetico` del túnel anterior deja de usarse en cuanto el DNS apunta al túnel nuevo. Se puede quitar de su `config.yml` en el siguiente mantenimiento; reiniciar `cloudflared` corta un momento las demás webs de ese túnel.
 
-- **Límites (`deploy/limites.conf`):** como máximo 1 núcleo (`CPUQuota=100%`), `MemoryHigh=400M` y `MemoryMax=512M`. La app es pública, sin login y de cálculo intensivo, y comparte servidor con otras apps. Si se excede, systemd frena o reinicia solo este servicio. Consumo medido con Streamlit 1.63: ~40 MB en reposo y ~180 MB de pico en una corrida de 500 × 500. Si el servidor nuevo es exclusivo para esta app, se pueden relajar o quitar.
-- **Verificación pública:** Cloudflare puede bloquear con `403` las peticiones que salen del propio servidor (WAF). La URL pública se comprueba desde un navegador externo; desde el servidor basta `curl` local y la validación de la regla del túnel.
+### 9.6 Operación
+
+```bash
+systemctl status streamlit@genetico --no-pager -l                 # estado, memoria y límites
+journalctl -u streamlit@genetico -f                                # logs en vivo
+curl http://127.0.0.1:8516/_stcore/health                          # salud local → "ok"
+git -C ~/Algoritmo_Genetico pull && bash ~/Algoritmo_Genetico/deploy/instalar.sh   # actualizar
+```
+
+Para cambiar los límites o las variables, edita `deploy/limites.conf` o `deploy/genetico.env` y vuelve a ejecutar `instalar.sh`.
+
+**Desinstalar:**
+
+```bash
+sudo systemctl disable --now streamlit@genetico cloudflared
+sudo cloudflared service uninstall
+sudo rm -r /etc/streamlit /etc/systemd/system/streamlit@genetico.service.d \
+           /etc/systemd/system/streamlit@.service /usr/local/bin/run_streamlit.sh
+sudo systemctl daemon-reload
+```
+
+### 9.7 Costos y notas
+
+- **Costo aproximado:** ~US$10 al mes = `t4g.micro` (~US$6) + IP pública (~US$3.6) + disco (~US$0.6–1.6). Son precios orientativos de us-east-2; confírmalos en la calculadora de AWS. Conviene crear un presupuesto en AWS Budgets con alerta.
+- **Consumo medido** (Streamlit 1.63): ~40 MB en reposo y ~180 MB de pico en una corrida de 500 × 500. El script agrega 1 GB de swap en instancias con menos de 2 GB de RAM.
+- **Verificación pública:** Cloudflare puede bloquear con `403` las peticiones que salen del propio servidor (WAF). La URL pública se comprueba desde un navegador; desde el servidor bastan el `curl` local y el estado del túnel en Cloudflare.
+- **Errores:** en producción se ocultan los tracebacks (`genetico.env`). Con `streamlit run app.py` en local se muestran completos.
 - **Sin login:** es un simulador educativo público y no maneja datos.
