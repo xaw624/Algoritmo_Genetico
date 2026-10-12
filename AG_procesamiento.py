@@ -1,5 +1,130 @@
+import ast
+import math
+import operator
+
 import numpy as np
 import sympy as sp
+
+
+# -----------------------------------------------------------
+# Validación de expresiones
+# sympify usa eval internamente, así que la expresión se revisa
+# con el AST de Python ANTES de pasársela. Solo se aceptan números,
+# x, pi, operadores aritméticos y las funciones de la lista.
+# -----------------------------------------------------------
+MAX_LONGITUD_EXPRESION = 200
+
+_FUNCIONES_PERMITIDAS = {
+    "sin": math.sin,
+    "cos": math.cos,
+    "tan": math.tan,
+    "exp": math.exp,
+    "log": math.log,
+    "sqrt": math.sqrt,
+    "abs": abs,
+    "Abs": abs,
+}
+_NOMBRES_PERMITIDOS = {"x", "pi"} | set(_FUNCIONES_PERMITIDAS)
+
+# sympify convierte ^ en potencia, por eso BitXor se trata como Pow
+_OPERADORES = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+    ast.BitXor: operator.pow,
+}
+_NODOS_PERMITIDOS = (
+    ast.Expression, ast.BinOp, ast.UnaryOp, ast.Call, ast.Name, ast.Load, ast.Constant,
+    ast.USub, ast.UAdd, *_OPERADORES,
+)
+
+
+def _valor_constante(node):
+    """
+    Evalúa con floats un subárbol que no depende de x.
+    Devuelve None si depende de x o no tiene valor real (p. ej. log(-1)).
+
+    Lanza ValueError si alguna constante desborda un float. Así se evita
+    que SymPy o Python intenten calcular enteros gigantes (9**9**9)
+    y bloqueen el servidor.
+    """
+    if isinstance(node, ast.Constant):
+        return float(node.value)
+    if isinstance(node, ast.Name):
+        return math.pi if node.id == "pi" else None
+
+    if isinstance(node, ast.UnaryOp):
+        operandos = [node.operand]
+    elif isinstance(node, ast.BinOp):
+        operandos = [node.left, node.right]
+    elif isinstance(node, ast.Call):
+        operandos = node.args
+    else:
+        return None
+
+    # Se evalúan todos los operandos para revisar cada subárbol constante,
+    # aunque el nodo actual dependa de x
+    valores = [_valor_constante(n) for n in operandos]
+    if any(v is None for v in valores):
+        return None
+
+    try:
+        if isinstance(node, ast.UnaryOp):
+            valor = -valores[0] if isinstance(node.op, ast.USub) else valores[0]
+        elif isinstance(node, ast.BinOp):
+            valor = _OPERADORES[type(node.op)](*valores)
+        else:
+            valor = _FUNCIONES_PERMITIDAS[node.func.id](*valores)
+    except OverflowError:
+        raise ValueError("La expresión contiene una constante demasiado grande.")
+    except (ValueError, ZeroDivisionError, TypeError):
+        return None
+
+    if isinstance(valor, complex):
+        return None
+    if not math.isfinite(valor):
+        raise ValueError("La expresión contiene una constante demasiado grande.")
+
+    return valor
+
+
+def validar_expresion(expr_str):
+    """
+    Verifica que la expresión solo use elementos permitidos.
+    Lanza ValueError con un mensaje claro si no es así.
+    """
+    if len(expr_str) > MAX_LONGITUD_EXPRESION:
+        raise ValueError(
+            f"La expresión excede {MAX_LONGITUD_EXPRESION} caracteres."
+        )
+
+    try:
+        tree = ast.parse(expr_str.strip(), mode="eval")
+    except SyntaxError as e:
+        raise ValueError(f"Sintaxis inválida: {e.msg}")
+
+    for node in ast.walk(tree):
+        if not isinstance(node, _NODOS_PERMITIDOS):
+            raise ValueError(f"Elemento no permitido: {type(node).__name__}")
+
+        if isinstance(node, ast.Name) and node.id not in _NOMBRES_PERMITIDOS:
+            raise ValueError(f"Nombre no permitido: '{node.id}'. Usa solo 'x'.")
+
+        if isinstance(node, ast.Call) and not (
+            isinstance(node.func, ast.Name) and node.func.id in _FUNCIONES_PERMITIDAS
+        ):
+            raise ValueError(
+                "Solo se permiten llamadas a sin, cos, tan, exp, log, sqrt y abs."
+            )
+
+        if isinstance(node, ast.Constant) and (
+            isinstance(node.value, bool) or not isinstance(node.value, (int, float))
+        ):
+            raise ValueError("Solo se permiten constantes numéricas.")
+
+    _valor_constante(tree.body)
 
 
 def _scalar_to_float_or_inf(value):
@@ -98,8 +223,9 @@ class GeneticAlgorithm1D:
         self.best_f = np.inf
 
         # Historial para visualización
-        self.history = []        # Guarda la población de cada generación
-        self.best_history = []   # Guarda (best_x, best_f) por generación
+        self.history = []         # Guarda la población de cada generación
+        self.values_history = []  # Guarda f(x) de cada población (+inf si no es válido)
+        self.best_history = []    # Guarda (best_x, best_f) por generación
 
     def initialize_population(self):
         """
@@ -144,6 +270,7 @@ class GeneticAlgorithm1D:
 
         # Guardar historial
         self.history.append(self.population.copy()) # type: ignore
+        self.values_history.append(values)
         self.best_history.append((self.best_x, self.best_f))
 
     def select_parent(self):
@@ -211,6 +338,10 @@ class GeneticAlgorithm1D:
 
         Nota:
         Se guarda también la generación 0 (población inicial).
+        Los valores f(x) de cada generación quedan en self.values_history.
+
+        Lanza ValueError si ningún individuo de la población inicial
+        tiene un valor finito de f(x).
         """
         # Reiniciar estado por si el objeto se reutiliza
         self.population = None
@@ -218,6 +349,7 @@ class GeneticAlgorithm1D:
         self.best_x = None
         self.best_f = np.inf
         self.history = []
+        self.values_history = []
         self.best_history = []
         self.sigma = self.initial_sigma
 
@@ -226,6 +358,12 @@ class GeneticAlgorithm1D:
 
         # 2) Evaluar generación 0
         self.evaluate()
+
+        if self.best_x is None:
+            raise ValueError(
+                "La función no tiene valores finitos en ningún individuo de la "
+                "población inicial. Ajusta el dominio o aumenta la población."
+            )
 
         # 3) Evolucionar
         for _ in range(self.generations):
@@ -244,7 +382,13 @@ def build_function(expr_str):
     sin, cos, tan, exp, log, sqrt, abs, pi
     Variable permitida:
     x
+
+    La expresión se valida antes con validar_expresion() y se interpreta
+    con evaluate=False para que SymPy no simplifique términos como
+    x - x y termine calculando constantes enormes.
     """
+    validar_expresion(expr_str)
+
     x = sp.symbols("x")
 
     allowed_locals = {
@@ -261,7 +405,7 @@ def build_function(expr_str):
     }
 
     try:
-        expr = sp.sympify(expr_str, locals=allowed_locals)
+        expr = sp.sympify(expr_str.strip(), locals=allowed_locals, evaluate=False)
     except Exception as e:
         raise ValueError(f"No se pudo interpretar la expresión: {e}")
 
