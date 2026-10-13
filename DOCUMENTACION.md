@@ -66,25 +66,28 @@ flowchart TD
 
 `sympy.sympify` usa `eval` internamente, así que la expresión del usuario **nunca** llega a SymPy sin validarse antes.
 
-**`validar_expresion(expr_str)`** ([AG_procesamiento.py:93](AG_procesamiento.py:93)):
+**`validar_expresion(expr_str)`** ([AG_procesamiento.py:100](AG_procesamiento.py:100)):
 
 1. Rechaza expresiones de más de `MAX_LONGITUD_EXPRESION = 200` caracteres.
-2. Analiza el texto con `ast.parse(..., mode="eval")`. Un error de sintaxis se convierte en `ValueError("Sintaxis inválida: ...")`.
+2. Convierte `^` en `**` (`_normalizar`), igual que hace SymPy, y analiza el texto con `ast.parse(..., mode="eval")`. El orden importa: en Python `9^9^9` se agrupa como `(9^9)^9`, pero SymPy lo convierte en `9**(9**9)`. Si se validara el texto sin convertir, el validador calcularía la versión pequeña y dejaría pasar la gigante. Un error de sintaxis se convierte en `ValueError("Sintaxis inválida: ...")`.
 3. Recorre el árbol y acepta solo una lista blanca:
    - números `int`/`float` (no `bool`, `complex` ni cadenas);
    - los nombres `x`, `pi`, `sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `abs`, `Abs`;
-   - los operadores `+ - * / **`, `^` (SymPy lo convierte en potencia) y el signo unario;
+   - los operadores `+ - * / **` (y `^`, ya convertido en `**`) y el signo unario;
    - llamadas solo a las funciones de la lista y sin argumentos con nombre.
 
    Cualquier otra cosa se rechaza: atributos (`().__class__`), `lambda`, listas, `__import__`, otras variables, etc.
 4. **`_valor_constante`** evalúa con `float` cada subárbol que no depende de `x`. Si alguno desborda (`9**9**9`, `(9**100)**100`, `exp(1000)`), lanza `ValueError("...constante demasiado grande")`. Sin esto, SymPy intentaba calcular enteros de cientos de millones de dígitos y bloqueaba el servidor.
 
-**`build_function(expr_str)`** ([AG_procesamiento.py:377](AG_procesamiento.py:377)):
+**`interpretar_expresion(expr_str)`** ([AG_procesamiento.py:384](AG_procesamiento.py:384)):
 
 1. Llama a `validar_expresion`.
 2. `sympy.sympify(..., locals=permitidos, evaluate=False)`. Con `evaluate=False`, SymPy **no simplifica**. Sin esa opción, `9**(x - x + 9**9)` se reducía a `9**387420489` y volvía a bloquear el proceso.
-3. Rechaza símbolos libres distintos de `x`.
-4. `sympy.lambdify(x, expr, "numpy")` y un envoltorio con `np.errstate(all="ignore")`.
+3. Rechaza símbolos libres distintos de `x` y devuelve `(expr, x)`.
+
+**`expresion_latex(expr_str)`** ([AG_procesamiento.py:506](AG_procesamiento.py:506)): valida con `interpretar_expresion` y genera el LaTeX **desde el mismo AST ya validado**, con el orden y la forma que escribió el usuario: `1/(1 + exp(-10*x))` → `\frac{1}{1 + e^{-10 x}}`. Se usa para mostrar la fórmula interpretada en la interfaz. No usa `sympy.latex`, que con `evaluate=False` producía cosas como `1 \frac{1}{…}`.
+
+**`build_function(expr_str)`** ([AG_procesamiento.py:516](AG_procesamiento.py:516)): `interpretar_expresion` + `sympy.lambdify(x, expr, "numpy")` con un envoltorio `np.errstate(all="ignore")`.
 
 ### 4.2 `GeneticAlgorithm1D`
 
@@ -123,26 +126,40 @@ flowchart TD
 
 ## 5. Interfaz: `app.py`
 
-### 5.1 Componentes
+### 5.1 Estructura de la página
+
+La página sigue el orden de la tarea. Primero se define el problema, luego aparece la gráfica y al final los detalles. La acción principal está en el área principal, así que también se ve en un móvil, donde la barra lateral está cerrada.
 
 | Zona | Contenido |
 |---|---|
-| Barra lateral | Función, dominio, población (4–500), generaciones (1–500), `pc`, `pm`, `sigma`; expander **🔧 Parámetros avanzados** (`k`, `γ`); velocidad de animación; casilla **Fijar semilla aleatoria** y semilla (deshabilitada si la casilla está desmarcada); botón ▶️. Cada control tiene `key` para poder probarlo. |
-| Expanders | “Instrucciones de uso” (sintaxis, límite de 200 caracteres) y “Fundamento teórico” (LaTeX: torneo con `k`, `σ_t = σ₀γᵗ`, parámetros avanzados, semilla opcional). |
-| Ejemplos rápidos | Lista `EJEMPLOS` con 12 pares (etiqueta, expresión), dibujados en filas de 4. Cada botón usa `on_click=set_example`. |
-| Resultados | Leyenda con la función, el dominio y la semilla usados; 3 métricas; animación de la población; slider **Explorar generación**; gráfica de convergencia con una línea punteada en la generación seleccionada; botón **🗑️ Limpiar resultados**. |
+| Encabezado | Título y una línea que explica qué hace la app. |
+| Definición del problema | **Función f(x) a minimizar** (la sintaxis está en el ícono de ayuda) y selector **Ejemplo**, con la descripción del ejemplo elegido. Debajo, **Límite inferior (a)**, **Límite superior (b)** y el botón principal **▶️ Ejecutar simulación** (`type="primary"`). |
+| Validación en vivo | Si todo es válido, la fórmula interpretada en **LaTeX** (`st.latex`). Si no, el error justo debajo de los campos: sintaxis, nombres no permitidos, dominio invertido o función sin valores en el dominio. Mientras haya un error, **Ejecutar** queda deshabilitado. |
+| Avisos | Si cambió un **parámetro del algoritmo** desde la última ejecución: “Cambiaste parámetros…”, y los resultados siguen visibles. Si cambió la **función o el dominio**: “La función o el dominio cambiaron…”, y en lugar de los resultados se ve la vista previa. Al volver al problema anterior, los resultados reaparecen. |
+| Gráfica | Antes de ejecutar: **vista previa** de f(x), del mismo tamaño que la animación para que la página no salte. Después: animación (si está activada), **Explorar generación** y el texto de estado. |
+| Resultados | Leyenda con la función, el dominio y la semilla; 3 métricas; convergencia del mejor valor, con una línea en la generación elegida; **🗑️ Limpiar resultados**. Las métricas se llenan **antes** de la animación, así que se ven mientras corre. |
+| Al final | Expanders “Cómo usar el simulador” y “Fundamento teórico”. |
+| Barra lateral | **🧬 Algoritmo**: población (4–500), generaciones (1–500), `pc`, `pm`, `sigma`. **🔧 Avanzado** (expander): `k`, `γ`, casilla y valor de la semilla. **🎞️ Visualización**: casilla **Animar la evolución** y velocidad **Lenta / Normal / Rápida** (250 / 80 / 15 ms entre frames; deshabilitada si no se anima). |
+
+**Ejemplos.** `EJEMPLOS` tiene 13 entradas con `nombre`, `expr`, `dominio` y `descripcion`. Al elegir uno (`aplicar_ejemplo`) se cargan la función **y su dominio sugerido**: por ejemplo, Doble pozo en [−2, 2] y Valles múltiples en [2.7, 7.5]. Si el usuario edita la función, el selector pasa a “— Personalizada —” (`marcar_personalizada`). La función, el ejemplo y el dominio se inicializan con `st.session_state.setdefault` y no con `value=`, porque los cambia un callback.
 
 ### 5.2 Funciones auxiliares
 
 | Función | Rol |
 |---|---|
 | `evaluar_vector_seguro(f, xs)` | Evalúa la curva punto a punto; los errores se convierten en `NaN`. |
+| `preparar_problema(expr, a, b)` | `@st.cache_data`. Valida, obtiene el LaTeX y muestrea la curva. Lanza `ValueError` si la función no tiene al menos 2 puntos válidos en el dominio. |
+| `evaluar_problema(expr, a, b)` | Devuelve `(problema, error)`. También cubre la función vacía y el dominio invertido. |
+| `imagen_vista_previa(expr, a, b)` | `@st.cache_data`. PNG de la curva antes de ejecutar. |
+| `aplicar_ejemplo()` / `marcar_personalizada()` | Callbacks del selector de ejemplos y del campo de la función. |
 | `format_value(v)` | 6 decimales o `"N/A"`. |
 | `limpiar_resultados()` | Borra `st.session_state.resultado`. |
 | `crear_figura(resultado)` | Crea la figura, calcula los márgenes una vez y guarda el **fondo** (curva, ejes, rejilla, leyenda) para hacer *blitting*. |
 | `renderizar_generacion(figura, resultado, gen)` | Restaura el fondo, repinta solo los puntos, la ★, la leyenda y el título, y devuelve un arreglo RGB para `st.image`. |
 | `texto_estado(resultado, gen)` | “Generación g/G \| Mejor histórico: …”. |
-| `mostrar_resultados(resultado, animar, frame_delay)` | Dibuja la sección de resultados. Con `animar=True` reproduce como máximo `MAX_FRAMES_ANIMACION = 100` frames espaciados (siempre la generación 0 y la última). Si no, muestra la generación del slider. |
+| `mostrar_resultados(resultado, recien_ejecutado, animar, frame_delay)` | Dibuja la sección de resultados. Solo anima si la simulación se acaba de ejecutar **y** la animación está activada: como máximo `MAX_FRAMES_ANIMACION = 100` frames espaciados, siempre con la generación 0 y la última. Si no, muestra la generación del slider. |
+
+**Detección de resultados desactualizados.** Cada resultado guarda `problema = (expr, a, b)` y `parametros`: población, generaciones, `pc`, `pm`, `σ`, `k`, `γ` y semilla. En cada rerun se comparan con los valores actuales. La animación y su velocidad no cuentan, porque no cambian el resultado.
 
 El slider usa la key `gen_<id de ejecución>`, de modo que cada simulación nueva empieza en la última generación.
 
@@ -150,23 +167,24 @@ El slider usa la key `gen_<id de ejecución>`, de modo que cada simulación nuev
 
 ## 6. Verificación
 
-**Pruebas automatizadas** (`pytest`, 60 pruebas, todas pasan):
+**Pruebas automatizadas** (`pytest`, 80 pruebas, todas pasan):
 
 - `test_ag_procesamiento.py`:
-  - Los 12 ejemplos y variantes (`x^2`, espacios iniciales, `Abs`) se aceptan.
+  - Los ejemplos y sus variantes (`x^2`, espacios iniciales, `Abs`) se aceptan.
   - 13 entradas maliciosas o inválidas se rechazan.
-  - Las constantes enormes se rechazan y `9**(x - x + 9**9)` ya no bloquea el proceso.
-  - El AG encuentra el mínimo real (malla de 200 001 puntos, tolerancia 10⁻²) en los 12 ejemplos.
+  - Las constantes enormes se rechazan, también escritas con `^` (`9^9^9`), y `9**(x - x + 9**9)` ya no bloquea el proceso.
+  - El LaTeX generado es correcto: fracciones, potencias, valor absoluto, paréntesis y signos.
+  - El AG encuentra el mínimo real (malla de 200 001 puntos, tolerancia 10⁻²) en los 12 ejemplos originales.
   - Los historiales quedan alineados y dentro del dominio.
   - El elitismo garantiza que el mejor histórico nunca empeora, y la semilla hace los resultados reproducibles.
   - `sigma_decay` y `tournament_k` se aplican, y los casos de error dan mensajes claros.
 - `test_app.py` (con `AppTest`):
-  - La ejecución por defecto funciona.
-  - Los resultados persisten al mover un control.
-  - El slider de generación y el botón de limpiar funcionan.
-  - Los 12 botones de ejemplo producen expresiones válidas.
-  - La ejecución sin semilla funciona.
-  - Un dominio inválido borra los resultados.
+  - La pantalla inicial muestra la fórmula y la vista previa, y **Ejecutar** está en el área principal.
+  - La ejecución funciona con y sin animación, y sin semilla.
+  - Los resultados persisten al mover un parámetro y se muestra el aviso de desactualizados.
+  - Al cambiar la función se ve la vista previa, y los resultados vuelven al restaurarla.
+  - Los 13 ejemplos son válidos y cargan su dominio; editar la función pasa el selector a “Personalizada”.
+  - Dominio invertido, función inválida y función sin valores en el dominio se avisan **sin ejecutar**, con el botón deshabilitado.
   - Una expresión maliciosa **no** llega a ejecutarse: se comprueba que no crea un archivo.
 
 **Resultados del AG** (dominio `[-10, 10]`, 50 individuos, 80 generaciones, semilla 42):
@@ -202,6 +220,7 @@ El slider usa la key `gen_<id de ejecución>`, de modo que cada simulación nuev
 |---|---|
 | 🔴 **Ejecución de código arbitrario** desde el campo f(x): `sympify` usa `eval` | Lista blanca sobre el AST (`validar_expresion`) antes de llamar a SymPy. |
 | 🔴 **Bloqueo del servidor** con `9**9**9` o `9**(x - x + 9**9)` | `_valor_constante` acota las constantes y se usa `sympify(..., evaluate=False)`. |
+| 🔴 **Bloqueo con `^`**: el validador analizaba `9^9^9` como `(9^9)^9` (pequeño), pero SymPy lo convierte en `9**(9**9)` | `_normalizar` convierte `^` en `**` **antes** de validar, así que se analiza exactamente lo que se calculará. |
 | 🔴 Población y generaciones sin máximo: cualquiera podía lanzar corridas de horas | Límite de 500 en cada una (peor caso 500 × 500 ≈ 26 s). |
 | 🔴 `sympy` faltaba en `requirements.txt`, que además estaba en UTF-16 con 44 paquetes fijados | Regenerado en UTF-8 con las 4 dependencias directas; nuevo `requirements-dev.txt`. |
 | 🟠 Ejemplo “Doble pozo” con un paréntesis de más | `"(x**2 - 1)**2"`. Los ejemplos ahora son una lista `EJEMPLOS` (100 líneas repetidas → un bucle). |
@@ -209,12 +228,13 @@ El slider usa la key `gen_<id de ejecución>`, de modo que cada simulación nuev
 | 🟠 Los resultados desaparecían al mover cualquier control | Se guardan en `st.session_state`; los reruns los muestran sin repetir la animación. |
 | 🟠 `RuntimeError` engañoso si ningún individuo inicial era válido | `ValueError` con un mensaje claro en `run()`. |
 | 🟠 La semilla decía “(opcional)” pero siempre se usaba | Casilla **Fijar semilla aleatoria**; desmarcada pasa `None`. |
+| 🟠 **UX** (auditoría, puntos 1–9): el botón de ejecutar estaba al final de la barra lateral (invisible en el móvil), los resultados quedaban debajo de 12 botones y 2 expanders, la pantalla inicial no mostraba nada, los errores aparecían lejos del campo y al ejecutar, los ejemplos no ajustaban el dominio, los resultados viejos no se marcaban y la animación no se podía omitir | Área principal con función, ejemplo, dominio y botón principal; gráfica justo debajo y teoría al final; vista previa de f(x); validación en vivo con LaTeX y botón deshabilitado si hay error; 13 ejemplos con dominio y descripción en un selector; avisos de resultados desactualizados; casilla **Animar** y velocidad **Lenta / Normal / Rápida**; barra lateral agrupada en Algoritmo / Avanzado / Visualización. |
 | 🟡 El fundamento teórico describía `σ` constante y no mencionaba `k` | Texto actualizado (`σ_t = σ₀γᵗ`, torneo con `k`); `γ` y `k` expuestos en “Parámetros avanzados”. |
 | 🟡 Animación lenta | Blitting, como máximo 100 frames, métricas antes de la animación; se dejó de evaluar `f` dos veces (`values_history`). |
 | 🟡 Tras un error, seguían visibles los resultados anteriores | Un error borra el resultado guardado. |
 | 🟡 README desactualizado, cortado y con enlace a otro repo | Reescrito para el AG, con instalación, uso y pruebas. |
 | 🟢 `__pycache__/` versionado y ruido CRLF/LF en `git status` | `.gitignore` actualizado y `.gitattributes` con `* text=auto`. Los archivos editados quedaron en LF, como en el repo. |
-| 🟢 Sin pruebas | 60 pruebas `pytest`. |
+| 🟢 Sin pruebas | 80 pruebas `pytest`. |
 | 🟢 Streamlit 1.45.1, con `use_container_width` en vías de desaparecer | Actualizado a **Streamlit 1.63.0** (y matplotlib 3.10.8): `use_container_width=True` → `width="stretch"`. El mensaje de éxito usa `icon="✅"`, porque 1.63 separa el emoji inicial del texto. Las pruebas corren sin avisos de deprecación. |
 
 ---
@@ -223,13 +243,18 @@ El slider usa la key `gen_<id de ejecución>`, de modo que cada simulación nuev
 
 Ninguna es un error; son mejoras opcionales:
 
-1. **Animación en el navegador con Plotly.** Una figura con `frames` se reproduciría en el cliente, con play/pausa, sin reruns ni imágenes enviadas desde el servidor. Requiere agregar `plotly`.
-2. **Operadores del AG:**
+1. **UX, fase 2** (puntos 10–13 de la auditoría):
+   - métricas más informativas (mínimo de referencia y error, generación en que se alcanzó el mejor valor);
+   - gráficas interactivas y que respeten el tema (`st.line_chart` para la convergencia), con texto legible en el móvil;
+   - `st.toast` en lugar del mensaje de éxito;
+   - tabla de “Parámetros usados” y descarga del historial en CSV.
+2. **Animación en el navegador con Plotly.** Una figura con `frames` se reproduciría en el cliente, con play/pausa, sin reruns ni imágenes enviadas desde el servidor. Requiere agregar `plotly`.
+3. **Operadores del AG:**
    - **BLX-α** (`α ∈ [−0.5, 1.5]`) en vez del crossover aritmético, que solo genera hijos *entre* los padres y contrae la población.
    - **Reflexión** en los bordes en vez de `np.clip`, que acumula individuos exactamente en los límites.
    - **Parada temprana** si el mejor valor no mejora en `n` generaciones.
-3. **Lock de dependencias** si se necesita reproducibilidad exacta del entorno (ver §2).
-4. **Vectorizar la evaluación.** `evaluate_individual` llama a `f` punto a punto (~85 µs por individuo). Evaluar la población completa como un arreglo de NumPy (con respaldo punto a punto si falla) acelera el motor varias veces y permitiría subir los límites de 500.
+4. **Lock de dependencias** si se necesita reproducibilidad exacta del entorno (ver §2).
+5. **Vectorizar la evaluación.** `evaluate_individual` llama a `f` punto a punto (~85 µs por individuo). Evaluar la población completa como un arreglo de NumPy (con respaldo punto a punto si falla) acelera el motor varias veces y permitiría subir los límites de 500.
 
 ---
 

@@ -4,10 +4,12 @@ Aplicación web interactiva construida con [Streamlit](https://streamlit.io/) qu
 
 ## 🚀 Características
 
-- Ingreso de funciones personalizadas `f(x)` (`sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `abs`, `pi`), validadas de forma segura.
-- 12 ejemplos rápidos: funciones multimodales, con mínimos en el borde, discontinuas en la derivada, etc.
+- Ingreso de funciones personalizadas `f(x)` (`sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `abs`, `pi`), validadas de forma segura y en vivo: la fórmula interpretada se muestra en LaTeX y los errores aparecen junto al campo.
+- 13 ejemplos que cargan la función con su dominio sugerido y una descripción: funciones multimodales, con mínimos en el borde, sin derivada en el mínimo, etc.
+- Vista previa de f(x) antes de ejecutar.
 - Control de todos los parámetros del AG: población, generaciones, `pc`, `pm`, `σ` relativo, enfriamiento de `σ`, tamaño del torneo y semilla.
-- Animación de la población y del mejor individuo histórico, con un control para revisar cualquier generación.
+- Animación de la población y del mejor individuo histórico (lenta, normal, rápida u omitida), con un control para revisar cualquier generación.
+- Aviso cuando los resultados mostrados ya no corresponden a los parámetros actuales.
 - Gráfica de convergencia del mejor valor encontrado.
 - Explicación teórica del método (en LaTeX) dentro de la app.
 
