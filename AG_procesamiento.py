@@ -26,19 +26,26 @@ _FUNCIONES_PERMITIDAS = {
 }
 _NOMBRES_PERMITIDOS = {"x", "pi"} | set(_FUNCIONES_PERMITIDAS)
 
-# sympify convierte ^ en potencia, por eso BitXor se trata como Pow
 _OPERADORES = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
     ast.Mult: operator.mul,
     ast.Div: operator.truediv,
     ast.Pow: operator.pow,
-    ast.BitXor: operator.pow,
 }
 _NODOS_PERMITIDOS = (
     ast.Expression, ast.BinOp, ast.UnaryOp, ast.Call, ast.Name, ast.Load, ast.Constant,
     ast.USub, ast.UAdd, *_OPERADORES,
 )
+
+
+def _normalizar(expr_str):
+    """
+    Convierte ^ en ** como hace sympify (convert_xor).
+    Hay que hacerlo ANTES de analizar el AST: en Python 9^9^9 se agrupa
+    como (9^9)^9, pero sympify lo convierte en 9**(9**9).
+    """
+    return expr_str.strip().replace("^", "**")
 
 
 def _valor_constante(node):
@@ -101,7 +108,7 @@ def validar_expresion(expr_str):
         )
 
     try:
-        tree = ast.parse(expr_str.strip(), mode="eval")
+        tree = ast.parse(_normalizar(expr_str), mode="eval")
     except SyntaxError as e:
         raise ValueError(f"Sintaxis inválida: {e.msg}")
 
@@ -374,9 +381,10 @@ class GeneticAlgorithm1D:
         return self.best_x, self.best_f, self.history, self.best_history
 
 
-def build_function(expr_str):
+def interpretar_expresion(expr_str):
     """
-    Construye una función numérica f(x) a partir de un string usando SymPy.
+    Valida el texto y lo convierte en una expresión de SymPy en la variable x.
+    Devuelve (expr, x). Lanza ValueError con un mensaje claro si no es válida.
 
     Funciones permitidas:
     sin, cos, tan, exp, log, sqrt, abs, pi
@@ -405,7 +413,7 @@ def build_function(expr_str):
     }
 
     try:
-        expr = sp.sympify(expr_str.strip(), locals=allowed_locals, evaluate=False)
+        expr = sp.sympify(_normalizar(expr_str), locals=allowed_locals, evaluate=False)
     except Exception as e:
         raise ValueError(f"No se pudo interpretar la expresión: {e}")
 
@@ -415,6 +423,102 @@ def build_function(expr_str):
         raise ValueError(
             f"La expresión contiene variables no permitidas: {invalid_symbols}. Usa solo 'x'."
         )
+
+    return expr, x
+
+
+# Precedencias para decidir paréntesis en LaTeX
+_PREC_SUMA, _PREC_PRODUCTO, _PREC_UNARIO, _PREC_POTENCIA, _PREC_ATOMO = 1, 2, 3, 4, 5
+
+_LATEX_FUNCIONES = {"sin": r"\sin", "cos": r"\cos", "tan": r"\tan", "log": r"\log"}
+
+
+def _parentesis(texto):
+    return rf"\left({texto}\right)"
+
+
+def _latex_constante(valor):
+    texto = repr(valor) if isinstance(valor, float) else str(valor)
+    if "e" in texto:
+        mantisa, exponente = texto.split("e")
+        return rf"{mantisa} \times 10^{{{int(exponente)}}}"
+    return texto
+
+
+def _latex_nodo(node):
+    """
+    Convierte un nodo del AST (ya validado) en LaTeX.
+    Devuelve (latex, precedencia).
+    """
+    if isinstance(node, ast.Constant):
+        return _latex_constante(node.value), _PREC_ATOMO
+
+    if isinstance(node, ast.Name):
+        return (r"\pi" if node.id == "pi" else node.id), _PREC_ATOMO
+
+    if isinstance(node, ast.UnaryOp):
+        operando, prec = _latex_nodo(node.operand)
+        if prec < _PREC_UNARIO:
+            operando = _parentesis(operando)
+        signo = "-" if isinstance(node.op, ast.USub) else "+"
+        return signo + operando, _PREC_UNARIO
+
+    if isinstance(node, ast.Call):
+        nombre = node.func.id
+        argumento = ", ".join(_latex_nodo(a)[0] for a in node.args)
+        if nombre in ("abs", "Abs"):
+            return rf"\left|{argumento}\right|", _PREC_ATOMO
+        if nombre == "sqrt":
+            return rf"\sqrt{{{argumento}}}", _PREC_ATOMO
+        if nombre == "exp":
+            return rf"e^{{{argumento}}}", _PREC_POTENCIA
+        return _LATEX_FUNCIONES[nombre] + _parentesis(argumento), _PREC_ATOMO
+
+    # BinOp
+    izq, p_izq = _latex_nodo(node.left)
+    der, p_der = _latex_nodo(node.right)
+
+    if isinstance(node.op, ast.Div):
+        return rf"\frac{{{izq}}}{{{der}}}", _PREC_ATOMO
+
+    if isinstance(node.op, ast.Pow):
+        if p_izq < _PREC_ATOMO:
+            izq = _parentesis(izq)
+        return f"{izq}^{{{der}}}", _PREC_POTENCIA
+
+    if isinstance(node.op, ast.Mult):
+        if p_izq < _PREC_PRODUCTO:
+            izq = _parentesis(izq)
+        if p_der < _PREC_PRODUCTO or p_der == _PREC_UNARIO:
+            der = _parentesis(der)
+        # Entre números se usa \cdot; con variables o funciones basta yuxtaponer
+        separador = r" \cdot " if isinstance(node.right, ast.Constant) else " "
+        return f"{izq}{separador}{der}", _PREC_PRODUCTO
+
+    # Suma y resta: el lado derecho necesita paréntesis si es otra suma
+    # (solo en la resta) o un signo unario
+    if p_der == _PREC_UNARIO or (isinstance(node.op, ast.Sub) and p_der <= _PREC_SUMA):
+        der = _parentesis(der)
+    operador = "+" if isinstance(node.op, ast.Add) else "-"
+    return f"{izq} {operador} {der}", _PREC_SUMA
+
+
+def expresion_latex(expr_str):
+    """
+    Devuelve la expresión en LaTeX tal como la escribió el usuario
+    (sin reordenar ni simplificar). Valida antes con interpretar_expresion().
+    """
+    interpretar_expresion(expr_str)
+    tree = ast.parse(_normalizar(expr_str), mode="eval")
+    return _latex_nodo(tree.body)[0]
+
+
+def build_function(expr_str):
+    """
+    Construye una función numérica f(x) a partir de un string usando SymPy.
+    Ver interpretar_expresion() para la sintaxis permitida.
+    """
+    expr, x = interpretar_expresion(expr_str)
 
     try:
         raw_f = sp.lambdify(x, expr, modules=["numpy"])

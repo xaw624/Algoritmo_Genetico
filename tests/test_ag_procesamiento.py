@@ -7,6 +7,7 @@ from AG_procesamiento import (
     MAX_LONGITUD_EXPRESION,
     GeneticAlgorithm1D,
     build_function,
+    expresion_latex,
     validar_expresion,
 )
 
@@ -133,3 +134,35 @@ def test_dominio_invalido():
 def test_sin_individuos_validos_da_error_claro():
     with pytest.raises(ValueError, match="valores finitos"):
         correr("sqrt(x)", bounds=(-10, 0.001), pop_size=10, random_state=1)
+
+
+# -----------------------------------------------------------
+# ^ como potencia y LaTeX
+# -----------------------------------------------------------
+@pytest.mark.parametrize("expr", ["9^9^9", "9^9^9 + x", "x + 9^(9^9)"])
+def test_circunflejo_se_valida_como_potencia(expr):
+    # En Python 9^9^9 se agrupa como (9^9)^9, pero sympify lo convierte en 9**(9**9)
+    with pytest.raises(ValueError, match="demasiado grande"):
+        build_function(expr)
+
+
+@pytest.mark.parametrize(
+    "expr, latex",
+    [
+        ("x^2 + 1", "x^{2} + 1"),
+        ("(x**2 - 1)**2", r"\left(x^{2} - 1\right)^{2}"),
+        ("1/(1 + exp(-10*x))", r"\frac{1}{1 + e^{-10 x}}"),
+        ("log(abs(x) + 1)", r"\log\left(\left|x\right| + 1\right)"),
+        ("sin(2*pi*x/3)", r"\sin\left(\frac{2 \pi x}{3}\right)"),
+        ("x - (x + 1)", r"x - \left(x + 1\right)"),
+        ("-x**2", "-x^{2}"),
+        ("2*3", r"2 \cdot 3"),
+    ],
+)
+def test_expresion_latex(expr, latex):
+    assert expresion_latex(expr) == latex
+
+
+def test_expresion_latex_valida_antes():
+    with pytest.raises(ValueError):
+        expresion_latex("__import__('os')")
