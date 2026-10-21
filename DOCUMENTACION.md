@@ -30,10 +30,10 @@ pyenv virtualenv 3.12.14 algoritmo-genetico-env
 pyenv local algoritmo-genetico-env
 pip install -r requirements-dev.txt     # o requirements.txt si no vas a correr pruebas
 streamlit run app.py                    # http://localhost:8501
-pytest                                  # 81 pruebas, ~40 s
+pytest                                  # 83 pruebas, ~10 s
 ```
 
-**`requirements.txt`**: contiene solo las 4 dependencias directas (`streamlit 1.63.0`, `numpy 2.3.0`, `matplotlib 3.10.8`, `sympy 1.14.0`). Streamlit instala por su cuenta pandas, pyarrow, altair, etc. Al no fijar las dependencias indirectas, una instalación nueva puede traer versiones más recientes. Si se necesita reproducibilidad exacta, conviene generar un lock (`pip freeze > requirements-lock.txt`, o usar `pip-tools` / `uv`).
+**`requirements.txt`**: contiene solo las 4 dependencias directas (`streamlit 1.63.0`, `numpy 2.3.0`, `plotly 7.1.0`, `sympy 1.14.0`). Streamlit instala por su cuenta pandas, pyarrow, altair, etc. Al no fijar las dependencias indirectas, una instalación nueva puede traer versiones más recientes. Si se necesita reproducibilidad exacta, conviene generar un lock (`pip freeze > requirements-lock.txt`, o usar `pip-tools` / `uv`).
 
 ---
 
@@ -50,9 +50,9 @@ flowchart TD
     F --> G[Muestrear 600 puntos de f para la curva]
     G --> H[GeneticAlgorithm1D.run]
     H --> I[Guardar resultado en session_state]
-    I --> J[mostrar_resultados con animar=True]
+    I --> J[mostrar_resultados: figura de Plotly con todos los cuadros]
     C -- No --> K{¿Hay resultado guardado?}
-    K -- Sí --> L[mostrar_resultados con animar=False: generación del slider]
+    K -- Sí --> L[mostrar_resultados: la misma figura, sin volver a ejecutar]
     K -- No --> M[Solo UI, ayuda y ejemplos]
     E -- error --> X[Borrar resultado anterior y mostrar error]
     F -- error --> X
@@ -136,10 +136,10 @@ La página sigue el orden de la tarea. Primero se define el problema, luego apar
 | Definición del problema | **Función f(x) a minimizar** (la sintaxis está en el ícono de ayuda) y selector **Ejemplo**, con la descripción del ejemplo elegido. Debajo, **Límite inferior (a)**, **Límite superior (b)** y el botón principal **▶️ Ejecutar simulación** (`type="primary"`). |
 | Validación en vivo | Si todo es válido, la fórmula interpretada en **LaTeX** (`st.latex`). Si no, el error justo debajo de los campos: sintaxis, nombres no permitidos, dominio invertido o función sin valores en el dominio. Si se pulsa **Ejecutar** con un error, no se ejecuta y aparece el aviso “Corrige el error indicado arriba…”. El botón no se deshabilita (ver §7). |
 | Avisos | Si cambió un **parámetro del algoritmo** desde la última ejecución: “Cambiaste parámetros…”, y los resultados siguen visibles. Si cambió la **función o el dominio**: “La función o el dominio cambiaron…”, y en lugar de los resultados se ve la vista previa. Al volver al problema anterior, los resultados reaparecen. |
-| Gráfica | Antes de ejecutar: **vista previa** de f(x), del mismo tamaño que la animación para que la página no salte. Después: animación (si está activada), **Explorar generación** y el texto de estado. |
-| Resultados | Leyenda con la función, el dominio y la semilla; 3 métricas; convergencia del mejor valor, con una línea en la generación elegida; **🗑️ Limpiar resultados**. Las métricas se llenan **antes** de la animación, así que se ven mientras corre. |
+| Gráfica | Antes de ejecutar: **vista previa** de f(x) en Plotly. Después: una figura de Plotly con la población (arriba) y la convergencia del mejor valor (abajo), los botones **▶ Reproducir**, **⏸ Pausa** y **⏮ Inicio**, y el control deslizante **Generación**. La animación se reproduce **en el navegador** (ver §5.3). |
+| Resultados | Mensaje «Simulación completada. Pulsa ▶ Reproducir…» (solo justo después de ejecutar); leyenda con la función, el dominio y la semilla; 3 métricas; **🗑️ Limpiar resultados**. |
 | Al final | Expanders “Cómo usar el simulador” y “Fundamento teórico”. |
-| Barra lateral | **🧬 Algoritmo**: población (4–500), generaciones (1–500), `pc`, `pm`, `sigma`. **🔧 Avanzado** (expander): `k`, `γ`, casilla y valor de la semilla. **🎞️ Visualización**: casilla **Animar la evolución** y velocidad **Lenta / Normal / Rápida** (250 / 80 / 15 ms entre frames; deshabilitada si no se anima). |
+| Barra lateral | **🧬 Algoritmo**: población (4–500), generaciones (1–500), `pc`, `pm`, `sigma`. **🔧 Avanzado** (expander): `k`, `γ`, casilla y valor de la semilla. **🎞️ Visualización**: **Velocidad de la animación**, **Lenta / Normal / Rápida** (250 / 100 / 40 ms por cuadro del botón ▶ Reproducir). |
 
 **Ejemplos.** `EJEMPLOS` tiene 13 entradas con `nombre`, `expr`, `dominio` y `descripcion`. Al elegir uno (`aplicar_ejemplo`) se cargan la función **y su dominio sugerido**: por ejemplo, Doble pozo en [−2, 2] y Valles múltiples en [2.7, 7.5]. Si el usuario edita la función, el selector pasa a “— Personalizada —” (`marcar_personalizada`). La función, el ejemplo y el dominio se inicializan con `st.session_state.setdefault` y no con `value=`, porque los cambia un callback.
 
@@ -150,24 +150,49 @@ La página sigue el orden de la tarea. Primero se define el problema, luego apar
 | `evaluar_vector_seguro(f, xs)` | Evalúa la curva punto a punto; los errores se convierten en `NaN`. |
 | `preparar_problema(expr, a, b)` | `@st.cache_data`. Valida, obtiene el LaTeX y muestrea la curva. Lanza `ValueError` si la función no tiene al menos 2 puntos válidos en el dominio. |
 | `evaluar_problema(expr, a, b)` | Devuelve `(problema, error)`. También cubre la función vacía y el dominio invertido. |
-| `imagen_vista_previa(expr, a, b)` | `@st.cache_data`. PNG de la curva antes de ejecutar. |
+| `figura_vista_previa(problema, expr, a, b)` | Figura de Plotly con la curva antes de ejecutar. |
 | `aplicar_ejemplo()` / `marcar_personalizada()` | Callbacks del selector de ejemplos y del campo de la función. |
 | `format_value(v)` | 6 decimales o `"N/A"`. |
 | `limpiar_resultados()` | Borra `st.session_state.resultado`. |
-| `crear_figura(resultado)` | Crea la figura, calcula los márgenes una vez y guarda el **fondo** (curva, ejes, rejilla, leyenda) para hacer *blitting*. |
-| `renderizar_generacion(figura, resultado, gen)` | Restaura el fondo, repinta solo los puntos, la ★, la leyenda y el título, y devuelve un arreglo RGB para `st.image`. |
-| `texto_estado(resultado, gen)` | “Generación g/G \| Mejor histórico: …”. |
-| `mostrar_resultados(resultado, recien_ejecutado, animar, frame_delay)` | Dibuja la sección de resultados. Solo anima si la simulación se acaba de ejecutar **y** la animación está activada: como máximo `MAX_FRAMES_ANIMACION = 100` frames espaciados, siempre con la generación 0 y la última. Si no, muestra la generación del slider. |
+| `generaciones_animadas(total)` | Generaciones que van como cuadros: como máximo `MAX_FRAMES_ANIMACION = 100`, espaciadas, siempre con la 0 y la última. |
+| `titulo_generacion(resultado, gen)` | “Generación g/G · Mejor histórico: …”. |
+| `trazas_generacion(resultado, gen)` | Las 4 trazas que cambian en cada cuadro: población, ★, marcador de la convergencia y texto de la generación. |
+| `figura_animacion(resultado, duracion_ms)` | Figura de Plotly con 2 filas, los cuadros, los botones y el control deslizante (ver §5.3). |
+| `mostrar_resultados(resultado, recien_ejecutado, duracion_ms)` | Dibuja la sección de resultados: mensaje de éxito, la figura (`st.plotly_chart`, key `animacion_<id>`), métricas y **Limpiar resultados**. |
 
 **Detección de resultados desactualizados.** Cada resultado guarda `problema = (expr, a, b)` y `parametros`: población, generaciones, `pc`, `pm`, `σ`, `k`, `γ` y semilla. En cada rerun se comparan con los valores actuales. La animación y su velocidad no cuentan, porque no cambian el resultado.
 
-El slider usa la key `gen_<id de ejecución>`, de modo que cada simulación nueva empieza en la última generación.
+### 5.3 Animación con Plotly
+
+Antes, la animación era un ciclo **en el servidor**: por cada generación dibujaba una imagen con Matplotlib, la mandaba al navegador y esperaba con `time.sleep`. Tenía tres problemas:
+
+- Cualquier re-ejecución de Streamlit (por ejemplo, el campo de la función confirmándose al hacer clic) cortaba el ciclo.
+- Las imágenes viajaban una por una por el websocket; a través de Cloudflare llegaban tarde o juntas y a veces la animación no se veía.
+- Ocupaba el servidor durante toda la animación (~65 ms por cuadro) y no se podía pausar.
+
+Ahora `figura_animacion` construye **una sola figura de Plotly** con todas las generaciones como `frames`, y el navegador la reproduce:
+
+| Traza | Fila | Cambia por cuadro |
+|---|---|---|
+| 0 · curva de f(x) | 1 | no |
+| 1 · población | 1 | sí |
+| 2 · ★ mejor histórico | 1 | sí |
+| 3 · convergencia del mejor valor | 2 | no |
+| 4 · marcador de la generación actual | 2 | sí |
+| 5 · texto “Generación g/G · Mejor histórico…” | 1 | sí |
+
+- Cada `go.Frame` actualiza solo las trazas 1, 2, 4 y 5 (`traces=[1, 2, 4, 5]`).
+- **▶ Reproducir** usa `redraw=False` y una transición `cubic-in-out` (70 % de la duración del cuadro), así que los puntos se **desplazan** en lugar de saltar. La duración viene de la barra lateral.
+- Con `redraw=False` Plotly no actualiza el título; por eso el texto de la generación es una traza de texto (5) y no el título.
+- **⏸ Pausa** y **⏮ Inicio** usan `animate` con duración 0; el control **Generación** tiene un paso por cuadro.
+- Plotly no permite que la animación arranque sola: después de ejecutar, la figura muestra la generación 0 y el mensaje de éxito pide pulsar **▶ Reproducir**.
+- La velocidad no cuenta como parámetro: cambiarla vuelve a dibujar la figura sin marcar los resultados como desactualizados.
 
 ---
 
 ## 6. Verificación
 
-**Pruebas automatizadas** (`pytest`, 81 pruebas, todas pasan):
+**Pruebas automatizadas** (`pytest`, 83 pruebas, todas pasan):
 
 - `test_ag_procesamiento.py`:
   - Los ejemplos y sus variantes (`x^2`, espacios iniciales, `Abs`) se aceptan.
@@ -180,7 +205,9 @@ El slider usa la key `gen_<id de ejecución>`, de modo que cada simulación nuev
   - `sigma_decay` y `tournament_k` se aplican, y los casos de error dan mensajes claros.
 - `test_app.py` (con `AppTest`):
   - La pantalla inicial muestra la fórmula y la vista previa, y **Ejecutar** está en el área principal.
-  - La ejecución funciona con y sin animación, y sin semilla.
+  - La ejecución funciona con los valores por defecto y sin semilla.
+  - La figura trae un cuadro por generación con su texto, los tres botones y un paso del control por cuadro; con 250 generaciones se limita a 100 cuadros (con la 0 y la última).
+  - La velocidad cambia la duración de los cuadros sin invalidar los resultados.
   - Los resultados persisten al mover un parámetro y se muestra el aviso de desactualizados.
   - Al cambiar la función se ve la vista previa, y los resultados vuelven al restaurarla.
   - Los 13 ejemplos son válidos y cargan su dominio; editar la función pasa el selector a “Personalizada”.
@@ -205,13 +232,15 @@ El slider usa la key `gen_<id de ejecución>`, de modo que cada simulación nuev
 | Terreno irregular | 6.0752 | −0.9985 | −0.9985 |
 | Escalón sigmoide | −10.0000 | 0.0000 | 0.0000 |
 
-**Rendimiento** (corrida por defecto, 80 generaciones, animación a 10 ms, máquina de 2 núcleos):
+**Rendimiento** (servidor; la animación ya no consume tiempo del servidor):
 
-| | Antes | Ahora |
+| Corrida | Matplotlib en el servidor | Plotly en el navegador |
 |---|---:|---:|
-| Dibujo por frame | ~215 ms (`savefig`, dpi 120, `bbox_inches="tight"`) | ~65 ms (blitting) |
-| Corrida completa con animación | 21.4 s | 8.3 s (7.7 s con Streamlit 1.63) |
-| Cambiar de generación con el slider | — (no existía) | ~0.6 s |
+| Por defecto (50 × 80): ejecutar y mostrar | 7.7 s con la animación | 0.2 s; figura de 0.16 MB |
+| Peor caso (500 × 500) | ~26 s del AG + animación | 5.5 s; figura de 1.3 MB (100 cuadros) |
+| Cambiar de generación | ~0.6 s (re-ejecución) | instantáneo (en el navegador) |
+
+**Prueba en navegador real** (Playwright + Edge, clics de mouse): tras pulsar ▶ Reproducir, el texto recorre las 81 generaciones y los puntos cambian de posición en los 4 casos —primera ejecución, fórmula cambiada con Enter, fórmula cambiada sin Enter y cambio de ejemplo—, 2 veces cada uno. Con la animación anterior, después de cambiar la fórmula la animación a veces no se movía.
 
 ---
 
@@ -231,12 +260,13 @@ El slider usa la key `gen_<id de ejecución>`, de modo que cada simulación nuev
 | 🟠 La semilla decía “(opcional)” pero siempre se usaba | Casilla **Fijar semilla aleatoria**; desmarcada pasa `None`. |
 | 🟠 **UX** (auditoría, puntos 1–9): el botón de ejecutar estaba al final de la barra lateral (invisible en el móvil), los resultados quedaban debajo de 12 botones y 2 expanders, la pantalla inicial no mostraba nada, los errores aparecían lejos del campo y al ejecutar, los ejemplos no ajustaban el dominio, los resultados viejos no se marcaban y la animación no se podía omitir | Área principal con función, ejemplo, dominio y botón principal; gráfica justo debajo y teoría al final; vista previa de f(x); validación en vivo con LaTeX y aviso si se pulsa Ejecutar con un error; 13 ejemplos con dominio y descripción en un selector; avisos de resultados desactualizados; casilla **Animar** y velocidad **Lenta / Normal / Rápida**; barra lateral agrupada en Algoritmo / Avanzado / Visualización. |
 | 🟡 El fundamento teórico describía `σ` constante y no mencionaba `k` | Texto actualizado (`σ_t = σ₀γᵗ`, torneo con `k`); `γ` y `k` expuestos en “Parámetros avanzados”. |
-| 🟡 Animación lenta | Blitting, como máximo 100 frames, métricas antes de la animación; se dejó de evaluar `f` dos veces (`values_history`). |
+| 🟡 Animación lenta | Blitting, como máximo 100 frames, métricas antes de la animación; se dejó de evaluar `f` dos veces (`values_history`). Reemplazada después por Plotly (siguiente fila). |
+| 🟠 **La animación a veces no se movía** (sobre todo la primera vez tras cambiar la fórmula) y no se podía pausar | Animación con `frames` de Plotly, reproducida en el navegador (§5.3): botones ▶/⏸/⏮, control de generación, convergencia en la misma figura y valores al pasar el mouse. Se quitó la casilla **Animar la evolución**; `matplotlib` se reemplazó por `plotly` en `requirements.txt`. |
 | 🟡 Tras un error, seguían visibles los resultados anteriores | Un error borra el resultado guardado. |
 | 🟠 **A veces Ejecutar no iniciaba**: con un error en la función, al corregirla y hacer clic directamente en el botón (deshabilitado por el error), el navegador confirmaba el texto y registraba el clic con el botón aún deshabilitado; el clic se perdía y había que pulsar dos veces | El botón ya no se deshabilita. Si se pulsa con un error, no se ejecuta y se muestra un aviso. Prueba de regresión `test_corregir_la_funcion_y_ejecutar_con_un_solo_clic`. |
 | 🟡 README desactualizado, cortado y con enlace a otro repo | Reescrito para el AG, con instalación, uso y pruebas. |
 | 🟢 `__pycache__/` versionado y ruido CRLF/LF en `git status` | `.gitignore` actualizado y `.gitattributes` con `* text=auto`. Los archivos editados quedaron en LF, como en el repo. |
-| 🟢 Sin pruebas | 81 pruebas `pytest`. |
+| 🟢 Sin pruebas | 83 pruebas `pytest`. |
 | 🟢 Streamlit 1.45.1, con `use_container_width` en vías de desaparecer | Actualizado a **Streamlit 1.63.0** (y matplotlib 3.10.8): `use_container_width=True` → `width="stretch"`. El mensaje de éxito usa `icon="✅"`, porque 1.63 separa el emoji inicial del texto. Las pruebas corren sin avisos de deprecación. |
 
 ---
@@ -247,16 +277,15 @@ Ninguna es un error; son mejoras opcionales:
 
 1. **UX, fase 2** (puntos 10–13 de la auditoría):
    - métricas más informativas (mínimo de referencia y error, generación en que se alcanzó el mejor valor);
-   - gráficas interactivas y que respeten el tema (`st.line_chart` para la convergencia), con texto legible en el móvil;
+   - revisar la figura de Plotly en el móvil (altura y tamaño del texto);
    - `st.toast` en lugar del mensaje de éxito;
    - tabla de “Parámetros usados” y descarga del historial en CSV.
-2. **Animación en el navegador con Plotly.** Una figura con `frames` se reproduciría en el cliente, con play/pausa, sin reruns ni imágenes enviadas desde el servidor. Requiere agregar `plotly`.
-3. **Operadores del AG:**
+2. **Operadores del AG:**
    - **BLX-α** (`α ∈ [−0.5, 1.5]`) en vez del crossover aritmético, que solo genera hijos *entre* los padres y contrae la población.
    - **Reflexión** en los bordes en vez de `np.clip`, que acumula individuos exactamente en los límites.
    - **Parada temprana** si el mejor valor no mejora en `n` generaciones.
-4. **Lock de dependencias** si se necesita reproducibilidad exacta del entorno (ver §2).
-5. **Vectorizar la evaluación.** `evaluate_individual` llama a `f` punto a punto (~85 µs por individuo). Evaluar la población completa como un arreglo de NumPy (con respaldo punto a punto si falla) acelera el motor varias veces y permitiría subir los límites de 500.
+3. **Lock de dependencias** si se necesita reproducibilidad exacta del entorno (ver §2).
+4. **Vectorizar la evaluación.** `evaluate_individual` llama a `f` punto a punto (~85 µs por individuo). Evaluar la población completa como un arreglo de NumPy (con respaldo punto a punto si falla) acelera el motor varias veces y permitiría subir los límites de 500.
 
 ---
 

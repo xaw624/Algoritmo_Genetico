@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,18 @@ def mensajes(app, tipo):
     return [m.value for m in getattr(app, tipo)]
 
 
+def graficas(app):
+    """Especificaciones (JSON) de las gráficas de Plotly de la página."""
+    return [json.loads(g.proto.spec) for g in app.get("plotly_chart")]
+
+
+def animacion(app):
+    """Figura de la animación: la gráfica de Plotly que tiene cuadros (frames)."""
+    con_cuadros = [g for g in graficas(app) if g.get("frames")]
+    assert len(con_cuadros) == 1
+    return con_cuadros[0]
+
+
 def formula(app):
     # AppTest devuelve el LaTeX envuelto en $$ ... $$
     return app.latex[0].value.strip("$\n")
@@ -47,7 +60,8 @@ def test_pantalla_inicial(at):
     assert not at.exception
     assert at.button(key="ejecutar").disabled is False
     assert formula(at).startswith("f(x) = x^{2}")
-    assert len(at.get("image")) == 1  # vista previa de la curva
+    assert len(graficas(at)) == 1  # vista previa de la curva
+    assert not graficas(at)[0].get("frames")
     assert not at.metric
 
 
@@ -61,19 +75,43 @@ def test_ejecutar_esta_en_el_area_principal(at):
 # -----------------------------------------------------------
 def test_ejecucion_por_defecto(at):
     ejecutar(at)
-    assert mensajes(at, "success") == ["Simulación completada."]
+    assert mensajes(at, "success")[0].startswith("Simulación completada.")
     assert at.success[0].icon == "✅"
     assert metricas(at)["Generaciones evaluadas"] == "10"
-    assert at.slider(key="gen_1").value == 10
 
 
-def test_ejecucion_sin_animacion(at):
-    at.checkbox(key="animar").uncheck().run()
-    assert at.radio(key="velocidad").disabled
-
+def test_la_animacion_se_envia_completa_al_navegador(at):
     ejecutar(at)
-    assert metricas(at)["Generaciones evaluadas"] == "10"
-    assert at.text[-1].value.startswith("Generación 10/10")
+    fig = animacion(at)
+
+    # Un cuadro por generación (0 a 10), con su título
+    assert [f["name"] for f in fig["frames"]] == [str(g) for g in range(11)]
+    assert fig["frames"][-1]["data"][-1]["text"][0].startswith("Generación 10/10")
+    assert fig["data"][-1]["text"][0].startswith("Generación 0/10")
+
+    # Botones de reproducción y control deslizante de generaciones
+    botones = [b["label"] for b in fig["layout"]["updatemenus"][0]["buttons"]]
+    assert botones == ["▶ Reproducir", "⏸ Pausa", "⏮ Inicio"]
+    assert len(fig["layout"]["sliders"][0]["steps"]) == 11
+
+
+def test_cuadros_limitados_con_muchas_generaciones(at):
+    at.number_input(key="generations").set_value(250).run()
+    ejecutar(at)
+    nombres = [f["name"] for f in animacion(at)["frames"]]
+    assert len(nombres) == 100
+    assert nombres[0] == "0" and nombres[-1] == "250"
+
+
+def test_velocidad_cambia_la_animacion_sin_invalidar_resultados(at):
+    ejecutar(at)
+    rapida = animacion(at)["layout"]["updatemenus"][0]["buttons"][0]["args"][1]["frame"]["duration"]
+
+    at.radio(key="velocidad").set_value("Lenta").run()
+    lenta = animacion(at)["layout"]["updatemenus"][0]["buttons"][0]["args"][1]["frame"]["duration"]
+
+    assert lenta > rapida
+    assert not at.info  # la velocidad no cuenta como cambio de parámetros
 
 
 def test_resultados_persisten_y_avisan_si_cambia_un_parametro(at):
@@ -100,10 +138,11 @@ def test_cambiar_el_problema_muestra_vista_previa(at):
     assert metricas(at)["Generaciones evaluadas"] == "10"
 
 
-def test_explorar_generacion(at):
+def test_los_resultados_se_ven_sin_volver_a_ejecutar(at):
     ejecutar(at)
-    at.slider(key="gen_1").set_value(3).run()
-    assert at.text[-1].value.startswith("Generación 3/10")
+    at.slider(key="pc").set_value(0.5).run()  # cualquier re-ejecución
+    assert animacion(at)["frames"]
+    assert not at.success
 
 
 def test_limpiar_resultados(at):
@@ -191,7 +230,7 @@ def test_corregir_la_funcion_y_ejecutar_con_un_solo_clic(at):
 
     at.text_input(key="func").set_value("x**2 + 2*x")
     ejecutar(at)
-    assert mensajes(at, "success") == ["Simulación completada."]
+    assert mensajes(at, "success")[0].startswith("Simulación completada.")
     assert not at.warning
 
 

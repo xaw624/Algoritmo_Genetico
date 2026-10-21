@@ -2,5 +2,5 @@
 # Streamlit instala por su cuenta pandas, pyarrow, altair, etc.
 streamlit==1.63.0
 numpy==2.3.0
-matplotlib==3.10.8
+plotly==7.1.0
 sympy==1.14.0
