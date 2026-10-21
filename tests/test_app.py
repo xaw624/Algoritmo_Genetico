@@ -165,14 +165,34 @@ def test_dominio_invalido_se_avisa_sin_ejecutar(at):
     at.run()
 
     assert mensajes(at, "error") == ["El límite inferior debe ser menor que el límite superior."]
-    assert at.button(key="ejecutar").disabled
     assert not at.metric
+
+    ejecutar(at)
+    assert not at.metric
+    assert "Corrige el error" in at.warning[0].value
 
 
 def test_funcion_invalida_se_avisa_sin_ejecutar(at):
     at.text_input(key="func").set_value("y + x").run()
     assert "Nombre no permitido" in at.error[0].value
-    assert at.button(key="ejecutar").disabled
+
+    ejecutar(at)
+    assert not at.metric
+    assert "Corrige el error" in at.warning[0].value
+
+
+def test_corregir_la_funcion_y_ejecutar_con_un_solo_clic(at):
+    """
+    Regresión: con el botón deshabilitado durante el error, el clic que llegaba
+    junto con la corrección del texto se perdía y había que pulsar dos veces.
+    """
+    at.text_input(key="func").set_value("x**2 + y").run()
+    assert at.button(key="ejecutar").disabled is False
+
+    at.text_input(key="func").set_value("x**2 + 2*x")
+    ejecutar(at)
+    assert mensajes(at, "success") == ["Simulación completada."]
+    assert not at.warning
 
 
 def test_funcion_sin_valores_en_el_dominio(at):
@@ -188,5 +208,7 @@ def test_expresion_maliciosa_no_se_ejecuta(at, tmp_path):
     at.text_input(key="func").set_value(f"__import__('pathlib').Path('{marca}').touch()").run()
 
     assert at.error
-    assert at.button(key="ejecutar").disabled
+
+    ejecutar(at)
+    assert not at.metric
     assert not marca.exists()

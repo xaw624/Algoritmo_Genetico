@@ -30,7 +30,7 @@ pyenv virtualenv 3.12.14 algoritmo-genetico-env
 pyenv local algoritmo-genetico-env
 pip install -r requirements-dev.txt     # o requirements.txt si no vas a correr pruebas
 streamlit run app.py                    # http://localhost:8501
-pytest                                  # 60 pruebas, ~20 s
+pytest                                  # 81 pruebas, ~40 s
 ```
 
 **`requirements.txt`**: contiene solo las 4 dependencias directas (`streamlit 1.63.0`, `numpy 2.3.0`, `matplotlib 3.10.8`, `sympy 1.14.0`). Streamlit instala por su cuenta pandas, pyarrow, altair, etc. Al no fijar las dependencias indirectas, una instalación nueva puede traer versiones más recientes. Si se necesita reproducibilidad exacta, conviene generar un lock (`pip freeze > requirements-lock.txt`, o usar `pip-tools` / `uv`).
@@ -134,7 +134,7 @@ La página sigue el orden de la tarea. Primero se define el problema, luego apar
 |---|---|
 | Encabezado | Título y una línea que explica qué hace la app. |
 | Definición del problema | **Función f(x) a minimizar** (la sintaxis está en el ícono de ayuda) y selector **Ejemplo**, con la descripción del ejemplo elegido. Debajo, **Límite inferior (a)**, **Límite superior (b)** y el botón principal **▶️ Ejecutar simulación** (`type="primary"`). |
-| Validación en vivo | Si todo es válido, la fórmula interpretada en **LaTeX** (`st.latex`). Si no, el error justo debajo de los campos: sintaxis, nombres no permitidos, dominio invertido o función sin valores en el dominio. Mientras haya un error, **Ejecutar** queda deshabilitado. |
+| Validación en vivo | Si todo es válido, la fórmula interpretada en **LaTeX** (`st.latex`). Si no, el error justo debajo de los campos: sintaxis, nombres no permitidos, dominio invertido o función sin valores en el dominio. Si se pulsa **Ejecutar** con un error, no se ejecuta y aparece el aviso “Corrige el error indicado arriba…”. El botón no se deshabilita (ver §7). |
 | Avisos | Si cambió un **parámetro del algoritmo** desde la última ejecución: “Cambiaste parámetros…”, y los resultados siguen visibles. Si cambió la **función o el dominio**: “La función o el dominio cambiaron…”, y en lugar de los resultados se ve la vista previa. Al volver al problema anterior, los resultados reaparecen. |
 | Gráfica | Antes de ejecutar: **vista previa** de f(x), del mismo tamaño que la animación para que la página no salte. Después: animación (si está activada), **Explorar generación** y el texto de estado. |
 | Resultados | Leyenda con la función, el dominio y la semilla; 3 métricas; convergencia del mejor valor, con una línea en la generación elegida; **🗑️ Limpiar resultados**. Las métricas se llenan **antes** de la animación, así que se ven mientras corre. |
@@ -167,7 +167,7 @@ El slider usa la key `gen_<id de ejecución>`, de modo que cada simulación nuev
 
 ## 6. Verificación
 
-**Pruebas automatizadas** (`pytest`, 80 pruebas, todas pasan):
+**Pruebas automatizadas** (`pytest`, 81 pruebas, todas pasan):
 
 - `test_ag_procesamiento.py`:
   - Los ejemplos y sus variantes (`x^2`, espacios iniciales, `Abs`) se aceptan.
@@ -184,7 +184,8 @@ El slider usa la key `gen_<id de ejecución>`, de modo que cada simulación nuev
   - Los resultados persisten al mover un parámetro y se muestra el aviso de desactualizados.
   - Al cambiar la función se ve la vista previa, y los resultados vuelven al restaurarla.
   - Los 13 ejemplos son válidos y cargan su dominio; editar la función pasa el selector a “Personalizada”.
-  - Dominio invertido, función inválida y función sin valores en el dominio se avisan **sin ejecutar**, con el botón deshabilitado.
+  - Dominio invertido, función inválida y función sin valores en el dominio se avisan y, al pulsar **Ejecutar**, no se ejecuta la simulación.
+  - Corregir la función y pulsar **Ejecutar** en el mismo paso ejecuta con un solo clic (regresión).
   - Una expresión maliciosa **no** llega a ejecutarse: se comprueba que no crea un archivo.
 
 **Resultados del AG** (dominio `[-10, 10]`, 50 individuos, 80 generaciones, semilla 42):
@@ -228,13 +229,14 @@ El slider usa la key `gen_<id de ejecución>`, de modo que cada simulación nuev
 | 🟠 Los resultados desaparecían al mover cualquier control | Se guardan en `st.session_state`; los reruns los muestran sin repetir la animación. |
 | 🟠 `RuntimeError` engañoso si ningún individuo inicial era válido | `ValueError` con un mensaje claro en `run()`. |
 | 🟠 La semilla decía “(opcional)” pero siempre se usaba | Casilla **Fijar semilla aleatoria**; desmarcada pasa `None`. |
-| 🟠 **UX** (auditoría, puntos 1–9): el botón de ejecutar estaba al final de la barra lateral (invisible en el móvil), los resultados quedaban debajo de 12 botones y 2 expanders, la pantalla inicial no mostraba nada, los errores aparecían lejos del campo y al ejecutar, los ejemplos no ajustaban el dominio, los resultados viejos no se marcaban y la animación no se podía omitir | Área principal con función, ejemplo, dominio y botón principal; gráfica justo debajo y teoría al final; vista previa de f(x); validación en vivo con LaTeX y botón deshabilitado si hay error; 13 ejemplos con dominio y descripción en un selector; avisos de resultados desactualizados; casilla **Animar** y velocidad **Lenta / Normal / Rápida**; barra lateral agrupada en Algoritmo / Avanzado / Visualización. |
+| 🟠 **UX** (auditoría, puntos 1–9): el botón de ejecutar estaba al final de la barra lateral (invisible en el móvil), los resultados quedaban debajo de 12 botones y 2 expanders, la pantalla inicial no mostraba nada, los errores aparecían lejos del campo y al ejecutar, los ejemplos no ajustaban el dominio, los resultados viejos no se marcaban y la animación no se podía omitir | Área principal con función, ejemplo, dominio y botón principal; gráfica justo debajo y teoría al final; vista previa de f(x); validación en vivo con LaTeX y aviso si se pulsa Ejecutar con un error; 13 ejemplos con dominio y descripción en un selector; avisos de resultados desactualizados; casilla **Animar** y velocidad **Lenta / Normal / Rápida**; barra lateral agrupada en Algoritmo / Avanzado / Visualización. |
 | 🟡 El fundamento teórico describía `σ` constante y no mencionaba `k` | Texto actualizado (`σ_t = σ₀γᵗ`, torneo con `k`); `γ` y `k` expuestos en “Parámetros avanzados”. |
 | 🟡 Animación lenta | Blitting, como máximo 100 frames, métricas antes de la animación; se dejó de evaluar `f` dos veces (`values_history`). |
 | 🟡 Tras un error, seguían visibles los resultados anteriores | Un error borra el resultado guardado. |
+| 🟠 **A veces Ejecutar no iniciaba**: con un error en la función, al corregirla y hacer clic directamente en el botón (deshabilitado por el error), el navegador confirmaba el texto y registraba el clic con el botón aún deshabilitado; el clic se perdía y había que pulsar dos veces | El botón ya no se deshabilita. Si se pulsa con un error, no se ejecuta y se muestra un aviso. Prueba de regresión `test_corregir_la_funcion_y_ejecutar_con_un_solo_clic`. |
 | 🟡 README desactualizado, cortado y con enlace a otro repo | Reescrito para el AG, con instalación, uso y pruebas. |
 | 🟢 `__pycache__/` versionado y ruido CRLF/LF en `git status` | `.gitignore` actualizado y `.gitattributes` con `* text=auto`. Los archivos editados quedaron en LF, como en el repo. |
-| 🟢 Sin pruebas | 80 pruebas `pytest`. |
+| 🟢 Sin pruebas | 81 pruebas `pytest`. |
 | 🟢 Streamlit 1.45.1, con `use_container_width` en vías de desaparecer | Actualizado a **Streamlit 1.63.0** (y matplotlib 3.10.8): `use_container_width=True` → `width="stretch"`. El mensaje de éxito usa `icon="✅"`, porque 1.63 separa el emoji inicial del texto. Las pruebas corren sin avisos de deprecación. |
 
 ---

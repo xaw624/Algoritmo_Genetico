@@ -632,13 +632,15 @@ with col_b:
 
 problema, error_problema = evaluar_problema(eq_str, x_min, x_max)
 
+# El botón no se deshabilita cuando hay un error: al corregir la función y hacer clic
+# directamente, el navegador confirma el texto y registra el clic con el botón todavía
+# deshabilitado, así que el clic se perdía y había que pulsar dos veces.
 with col_ejecutar:
     run_button = st.button(
         "▶️ Ejecutar simulación",
         type="primary",
         width="stretch",
         key="ejecutar",
-        disabled=problema is None,
     )
 
 # Validación en vivo, junto a los campos: fórmula interpretada o error
@@ -648,6 +650,9 @@ else:
     st.error(error_problema)
 
 zona_mensajes = st.container()
+
+if run_button and problema is None:
+    zona_mensajes.warning("Corrige el error indicado arriba para ejecutar la simulación.", icon="⚠️")
 
 
 # -----------------------------------------------------------
