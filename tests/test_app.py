@@ -95,6 +95,24 @@ def test_la_animacion_se_envia_completa_al_navegador(at):
     assert len(fig["layout"]["sliders"][0]["steps"]) == 11
 
 
+def scripts(app):
+    return [h.proto for h in app.get("html") if h.proto.unsafe_allow_javascript]
+
+
+def test_ejecutar_inicia_la_animacion_automaticamente(at):
+    ejecutar(at)
+    [script] = scripts(at)
+    assert "Reproducir" in script.body
+    assert "const ejecucion = 1;" in script.body
+
+
+def test_otros_controles_no_vuelven_a_reproducir_la_animacion(at):
+    ejecutar(at)
+    at.radio(key="velocidad").set_value("Lenta").run()
+    assert not scripts(at)
+    assert animacion(at)["frames"]  # la animación sigue disponible
+
+
 def test_cuadros_limitados_con_muchas_generaciones(at):
     at.number_input(key="generations").set_value(250).run()
     ejecutar(at)

@@ -30,7 +30,7 @@ pyenv virtualenv 3.12.14 algoritmo-genetico-env
 pyenv local algoritmo-genetico-env
 pip install -r requirements-dev.txt     # o requirements.txt si no vas a correr pruebas
 streamlit run app.py                    # http://localhost:8501
-pytest                                  # 83 pruebas, ~10 s
+pytest                                  # 85 pruebas, ~10 s
 ```
 
 **`requirements.txt`**: contiene solo las 4 dependencias directas (`streamlit 1.63.0`, `numpy 2.3.0`, `plotly 7.1.0`, `sympy 1.14.0`). Streamlit instala por su cuenta pandas, pyarrow, altair, etc. Al no fijar las dependencias indirectas, una instalación nueva puede traer versiones más recientes. Si se necesita reproducibilidad exacta, conviene generar un lock (`pip freeze > requirements-lock.txt`, o usar `pip-tools` / `uv`).
@@ -137,7 +137,7 @@ La página sigue el orden de la tarea. Primero se define el problema, luego apar
 | Validación en vivo | Si todo es válido, la fórmula interpretada en **LaTeX** (`st.latex`). Si no, el error justo debajo de los campos: sintaxis, nombres no permitidos, dominio invertido o función sin valores en el dominio. Si se pulsa **Ejecutar** con un error, no se ejecuta y aparece el aviso “Corrige el error indicado arriba…”. El botón no se deshabilita (ver §7). |
 | Avisos | Si cambió un **parámetro del algoritmo** desde la última ejecución: “Cambiaste parámetros…”, y los resultados siguen visibles. Si cambió la **función o el dominio**: “La función o el dominio cambiaron…”, y en lugar de los resultados se ve la vista previa. Al volver al problema anterior, los resultados reaparecen. |
 | Gráfica | Antes de ejecutar: **vista previa** de f(x) en Plotly. Después: una figura de Plotly con la población (arriba) y la convergencia del mejor valor (abajo), los botones **▶ Reproducir**, **⏸ Pausa** y **⏮ Inicio**, y el control deslizante **Generación**. La animación se reproduce **en el navegador** (ver §5.3). |
-| Resultados | Mensaje «Simulación completada. Pulsa ▶ Reproducir…» (solo justo después de ejecutar); leyenda con la función, el dominio y la semilla; 3 métricas; **🗑️ Limpiar resultados**. |
+| Resultados | Mensaje «Simulación completada.» (solo justo después de ejecutar); leyenda con la función, el dominio y la semilla; 3 métricas; **🗑️ Limpiar resultados**. |
 | Al final | Expanders “Cómo usar el simulador” y “Fundamento teórico”. |
 | Barra lateral | **🧬 Algoritmo**: población (4–500), generaciones (1–500), `pc`, `pm`, `sigma`. **🔧 Avanzado** (expander): `k`, `γ`, casilla y valor de la semilla. **🎞️ Visualización**: **Velocidad de la animación**, **Lenta / Normal / Rápida** (250 / 100 / 40 ms por cuadro del botón ▶ Reproducir). |
 
@@ -185,14 +185,14 @@ Ahora `figura_animacion` construye **una sola figura de Plotly** con todas las g
 - **▶ Reproducir** usa `redraw=False` y una transición `cubic-in-out` (70 % de la duración del cuadro), así que los puntos se **desplazan** en lugar de saltar. La duración viene de la barra lateral.
 - Con `redraw=False` Plotly no actualiza el título; por eso el texto de la generación es una traza de texto (5) y no el título.
 - **⏸ Pausa** y **⏮ Inicio** usan `animate` con duración 0; el control **Generación** tiene un paso por cuadro.
-- Plotly no permite que la animación arranque sola: después de ejecutar, la figura muestra la generación 0 y el mensaje de éxito pide pulsar **▶ Reproducir**.
+- **Arranque automático.** Plotly no tiene una opción para que una animación arranque sola. Justo después de ejecutar (y solo entonces), `reproducir_al_cargar` agrega con `st.html(..., unsafe_allow_javascript=True)` un script fijo que espera a que Plotly dibuje la figura de esa ejecución y pulsa **▶ Reproducir**. La figura se identifica con `layout.meta = {"ejecucion": id}`: mientras se dibuja la nueva, la de la ejecución anterior sigue un momento en la página, y pulsar su botón provocaba errores de Plotly. Al mover otros controles no se envía el script, así que la animación no se repite.
 - La velocidad no cuenta como parámetro: cambiarla vuelve a dibujar la figura sin marcar los resultados como desactualizados.
 
 ---
 
 ## 6. Verificación
 
-**Pruebas automatizadas** (`pytest`, 83 pruebas, todas pasan):
+**Pruebas automatizadas** (`pytest`, 85 pruebas, todas pasan):
 
 - `test_ag_procesamiento.py`:
   - Los ejemplos y sus variantes (`x^2`, espacios iniciales, `Abs`) se aceptan.
@@ -208,6 +208,7 @@ Ahora `figura_animacion` construye **una sola figura de Plotly** con todas las g
   - La ejecución funciona con los valores por defecto y sin semilla.
   - La figura trae un cuadro por generación con su texto, los tres botones y un paso del control por cuadro; con 250 generaciones se limita a 100 cuadros (con la 0 y la última).
   - La velocidad cambia la duración de los cuadros sin invalidar los resultados.
+  - Al ejecutar se envía el script que inicia la animación; al mover otro control, no.
   - Los resultados persisten al mover un parámetro y se muestra el aviso de desactualizados.
   - Al cambiar la función se ve la vista previa, y los resultados vuelven al restaurarla.
   - Los 13 ejemplos son válidos y cargan su dominio; editar la función pasa el selector a “Personalizada”.
@@ -264,9 +265,10 @@ Ahora `figura_animacion` construye **una sola figura de Plotly** con todas las g
 | 🟠 **La animación a veces no se movía** (sobre todo la primera vez tras cambiar la fórmula) y no se podía pausar | Animación con `frames` de Plotly, reproducida en el navegador (§5.3): botones ▶/⏸/⏮, control de generación, convergencia en la misma figura y valores al pasar el mouse. Se quitó la casilla **Animar la evolución**; `matplotlib` se reemplazó por `plotly` en `requirements.txt`. |
 | 🟡 Tras un error, seguían visibles los resultados anteriores | Un error borra el resultado guardado. |
 | 🟠 **A veces Ejecutar no iniciaba**: con un error en la función, al corregirla y hacer clic directamente en el botón (deshabilitado por el error), el navegador confirmaba el texto y registraba el clic con el botón aún deshabilitado; el clic se perdía y había que pulsar dos veces | El botón ya no se deshabilita. Si se pulsa con un error, no se ejecuta y se muestra un aviso. Prueba de regresión `test_corregir_la_funcion_y_ejecutar_con_un_solo_clic`. |
+| 🟡 Había que pulsar **Ejecutar** y luego **▶ Reproducir** | La animación arranca sola al ejecutar (`reproducir_al_cargar`, §5.3). Verificado en Edge: 81 generaciones en la primera ejecución, con una fórmula nueva sin Enter y al repetir; sin errores de JavaScript, y sin repetirse al cambiar la velocidad. |
 | 🟡 README desactualizado, cortado y con enlace a otro repo | Reescrito para el AG, con instalación, uso y pruebas. |
 | 🟢 `__pycache__/` versionado y ruido CRLF/LF en `git status` | `.gitignore` actualizado y `.gitattributes` con `* text=auto`. Los archivos editados quedaron en LF, como en el repo. |
-| 🟢 Sin pruebas | 83 pruebas `pytest`. |
+| 🟢 Sin pruebas | 85 pruebas `pytest`. |
 | 🟢 Streamlit 1.45.1, con `use_container_width` en vías de desaparecer | Actualizado a **Streamlit 1.63.0** (y matplotlib 3.10.8): `use_container_width=True` → `width="stretch"`. El mensaje de éxito usa `icon="✅"`, porque 1.63 separa el emoji inicial del texto. Las pruebas corren sin avisos de deprecación. |
 
 ---
