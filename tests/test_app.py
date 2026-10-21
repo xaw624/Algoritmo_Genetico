@@ -86,8 +86,9 @@ def test_la_animacion_se_envia_completa_al_navegador(at):
 
     # Un cuadro por generación (0 a 10), con su título
     assert [f["name"] for f in fig["frames"]] == [str(g) for g in range(11)]
-    assert fig["frames"][-1]["data"][-1]["text"][0].startswith("Generación 10/10")
-    assert fig["data"][-1]["text"][0].startswith("Generación 0/10")
+    # Cada cuadro trae [población, ★, marcador, texto, mínimos]; en la figura el texto es la traza 5
+    assert fig["frames"][-1]["data"][3]["text"][0].startswith("Generación 10/10")
+    assert fig["data"][5]["text"][0].startswith("Generación 0/10")
 
     # Botones de reproducción y control deslizante de generaciones
     botones = [b["label"] for b in fig["layout"]["updatemenus"][0]["buttons"]]
@@ -111,6 +112,48 @@ def test_otros_controles_no_vuelven_a_reproducir_la_animacion(at):
     at.radio(key="velocidad").set_value("Lenta").run()
     assert not scripts(at)
     assert animacion(at)["frames"]  # la animación sigue disponible
+
+
+def test_nichos_desactivados_por_defecto(at):
+    assert at.checkbox(key="nichos").value is False
+    assert at.slider(key="radio_nicho").disabled
+    ejecutar(at)
+    assert not at.get("arrow_data_frame")  # sin tabla de mínimos
+    assert not any(t.get("name") == "Mínimos encontrados" and t.get("showlegend")
+                   for t in animacion(at)["data"])
+
+
+def test_nichos_muestran_tabla_y_marcan_los_minimos(at):
+    at.selectbox(key="ejemplo").set_value("Doble pozo").run()
+    at.number_input(key="generations").set_value(80)
+    at.checkbox(key="nichos").check().run()
+    assert not at.slider(key="radio_nicho").disabled
+    ejecutar(at)
+
+    assert any(s.value == "Mínimos encontrados" for s in at.subheader)
+    tabla = at.dataframe[0].value
+    globales = sorted(x for x, fx in zip(tabla["x"], tabla["f(x)"]) if fx < 1e-4)
+    assert len(globales) == 2 and globales[0] < 0 < globales[1]
+
+    # Rombos solo en el último cuadro
+    fig = animacion(at)
+    assert not fig["frames"][0]["data"][4]["x"]
+    assert len(fig["frames"][-1]["data"][4]["x"]) == len(tabla["x"])
+
+
+def test_cambiar_nichos_o_su_radio_marca_resultados_desactualizados(at):
+    at.checkbox(key="nichos").check().run()
+    ejecutar(at)
+    assert not at.info
+
+    at.slider(key="radio_nicho").set_value(0.1).run()
+    assert "Cambiaste parámetros" in at.info[0].value
+
+    # Volver al radio usado quita el aviso; desactivar los nichos lo vuelve a mostrar
+    at.slider(key="radio_nicho").set_value(0.05).run()
+    assert not at.info
+    at.checkbox(key="nichos").uncheck().run()
+    assert "Cambiaste parámetros" in at.info[0].value
 
 
 def test_cuadros_limitados_con_muchas_generaciones(at):

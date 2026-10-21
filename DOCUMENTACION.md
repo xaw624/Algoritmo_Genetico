@@ -30,7 +30,7 @@ pyenv virtualenv 3.12.14 algoritmo-genetico-env
 pyenv local algoritmo-genetico-env
 pip install -r requirements-dev.txt     # o requirements.txt si no vas a correr pruebas
 streamlit run app.py                    # http://localhost:8501
-pytest                                  # 85 pruebas, ~10 s
+pytest                                  # 95 pruebas, ~10 s
 ```
 
 **`requirements.txt`**: contiene solo las 4 dependencias directas (`streamlit 1.63.0`, `numpy 2.3.0`, `plotly 7.1.0`, `sympy 1.14.0`). Streamlit instala por su cuenta pandas, pyarrow, altair, etc. Al no fijar las dependencias indirectas, una instalación nueva puede traer versiones más recientes. Si se necesita reproducibilidad exacta, conviene generar un lock (`pip freeze > requirements-lock.txt`, o usar `pip-tools` / `uv`).
@@ -105,6 +105,7 @@ flowchart TD
 | `tournament_k` | 3 | Avanzados → k | Tamaño del torneo |
 | `sigma_decay` | 0.99 | Avanzados → γ | `σ_t = σ₀·γᵗ` |
 | `random_state` | `None` / 42 | Fijar semilla + Semilla | Semilla de `np.random.default_rng`; `None` = aleatoria |
+| `niching` / `niche_radius` | `False` / 0.05 | Buscar varios mínimos + Radio del nicho | Nichos por clearing (ver §4.3) |
 
 **Ciclo de `run()`** ([AG_procesamiento.py:331](AG_procesamiento.py:331)):
 
@@ -113,7 +114,7 @@ flowchart TD
 3. **Evaluación** (`evaluate`): `f` en cada individuo. Los errores, `nan` e `inf` se convierten en `+inf` (penalización). Actualiza el mejor histórico y guarda `history`, `values_history` y `best_history`.
 4. Si **ningún** individuo de la generación 0 tiene `f(x)` finito, lanza un `ValueError` claro (“La función no tiene valores finitos en ningún individuo de la población inicial…”).
 5. Repite `generations` veces:
-   - **Elitismo:** el mejor histórico pasa directo.
+   - **Elitismo:** el mejor histórico pasa directo (con nichos, los ganadores de nicho; ver §4.3).
    - **Torneo:** `k` individuos distintos al azar; gana el de mayor fitness.
    - **Crossover aritmético:** con prob. `pc`, `hijo = α·p1 + (1−α)·p2`, `α ~ U(0,1)`; si no, `hijo = p1`.
    - **Mutación gaussiana:** con prob. `pm`, `x += N(0, σ_t)`; después siempre se aplica `np.clip` a `[a, b]`.
@@ -121,6 +122,36 @@ flowchart TD
 6. Devuelve `(best_x, best_f, history, best_history)`. Además, `ag.values_history` contiene los `f(x)` de cada población, ya calculados, para que la app no tenga que volver a evaluarlos.
 
 **Costo:** `pop_size × (generations + 1)` evaluaciones de `f` (≈ 4 050 por defecto, ~0.35 s).
+
+### 4.3 Nichos: varios mínimos (`niching=True`)
+
+Sin nichos, la población termina en **un solo** valle aunque haya varios mínimos igual de buenos. Tres cosas la empujan a eso: el elitismo conserva solo al mejor, el torneo favorece siempre a los mismos valles y el cruce aritmético genera hijos *entre* los padres, lo que contrae la población.
+
+Con `niching=True` se aplica **clearing** (Pétrowski, 1996) en cada evaluación (`_clearing`):
+
+1. Se recorren los individuos del mejor al peor `f(x)`.
+2. El primero que no haya sido despejado **gana su nicho**; todos los demás a distancia menor que `niche_radius·(b − a)` reciben aptitud `−∞` y no ganan torneos.
+3. En `step`, el elitismo conserva a los **ganadores de nicho** (como máximo `pop_size // 2`) en lugar de solo al mejor histórico.
+
+`minimos()` devuelve los ganadores de la última generación que están en el fondo de un valle (`_es_valle`: `f(x) ≤ f(x ± r/2)`; en el borde del dominio solo se mira el lado interior). El filtro hace falta porque el clearing también deja ganadores repartidos sobre las laderas, a un radio de distancia entre sí. Cada mínimo es `{"x", "f", "individuos"}`, ordenados del mejor al peor.
+
+| Parámetro | Por defecto | En la UI | Significado |
+|---|---|---|---|
+| `niching` | `False` | Buscar varios mínimos (nichos) | Activa el clearing |
+| `niche_radius` | 0.05 | Radio del nicho (0.01–0.30) | Radio relativo al ancho del dominio |
+
+Con `niching=False` el código es exactamente el de antes: se comprobó que los resultados con semilla son idénticos bit a bit.
+
+**Resultados** (50 individuos, 80 generaciones, semilla 42, radio 0.05; mínimos reales de una malla de 200 001 puntos):
+
+| Ejemplo | Mínimos reales | Encontrados |
+|---|---|---|
+| Doble pozo | ±1 (f = 0) | los 2 |
+| Seno | 4 globales en −3.75, −0.75, 2.25, 5.25 (f = −1) | los 4 (más el del borde x = −6) |
+| Combinada | 2 globales en ±1.331 y locales en ±4.66, ±3.55, … | los 2 globales y 8 locales |
+| Valles múltiples | 3.39, 5.146 y 7.00 | los 3 |
+| Terreno irregular | 10 locales, el global en −0.208 | los 10 |
+| Sinusoidal | 5 globales (f = −1) | los 5 (más el del borde x = 3) |
 
 ---
 
@@ -139,7 +170,7 @@ La página sigue el orden de la tarea. Primero se define el problema, luego apar
 | Gráfica | Antes de ejecutar: **vista previa** de f(x) en Plotly. Después: una figura de Plotly con la población (arriba) y la convergencia del mejor valor (abajo), los botones **▶ Reproducir**, **⏸ Pausa** y **⏮ Inicio**, y el control deslizante **Generación**. La animación se reproduce **en el navegador** (ver §5.3). |
 | Resultados | Mensaje «Simulación completada.» (solo justo después de ejecutar); leyenda con la función, el dominio y la semilla; 3 métricas; **🗑️ Limpiar resultados**. |
 | Al final | Expanders “Cómo usar el simulador” y “Fundamento teórico”. |
-| Barra lateral | **🧬 Algoritmo**: población (4–500), generaciones (1–500), `pc`, `pm`, `sigma`. **🔧 Avanzado** (expander): `k`, `γ`, casilla y valor de la semilla. **🎞️ Visualización**: **Velocidad de la animación**, **Lenta / Normal / Rápida** (250 / 100 / 40 ms por cuadro del botón ▶ Reproducir). |
+| Barra lateral | **🧬 Algoritmo**: población (4–500), generaciones (1–500), `pc`, `pm`, `sigma`, casilla **Buscar varios mínimos (nichos)** y **Radio del nicho** (deshabilitado sin nichos). **🔧 Avanzado** (expander): `k`, `γ`, casilla y valor de la semilla. **🎞️ Visualización**: **Velocidad de la animación**, **Lenta / Normal / Rápida** (250 / 100 / 40 ms por cuadro del botón ▶ Reproducir). |
 
 **Ejemplos.** `EJEMPLOS` tiene 13 entradas con `nombre`, `expr`, `dominio` y `descripcion`. Al elegir uno (`aplicar_ejemplo`) se cargan la función **y su dominio sugerido**: por ejemplo, Doble pozo en [−2, 2] y Valles múltiples en [2.7, 7.5]. Si el usuario edita la función, el selector pasa a “— Personalizada —” (`marcar_personalizada`). La función, el ejemplo y el dominio se inicializan con `st.session_state.setdefault` y no con `value=`, porque los cambia un callback.
 
@@ -160,7 +191,7 @@ La página sigue el orden de la tarea. Primero se define el problema, luego apar
 | `figura_animacion(resultado, duracion_ms)` | Figura de Plotly con 2 filas, los cuadros, los botones y el control deslizante (ver §5.3). |
 | `mostrar_resultados(resultado, recien_ejecutado, duracion_ms)` | Dibuja la sección de resultados: mensaje de éxito, la figura (`st.plotly_chart`, key `animacion_<id>`), métricas y **Limpiar resultados**. |
 
-**Detección de resultados desactualizados.** Cada resultado guarda `problema = (expr, a, b)` y `parametros`: población, generaciones, `pc`, `pm`, `σ`, `k`, `γ` y semilla. En cada rerun se comparan con los valores actuales. La animación y su velocidad no cuentan, porque no cambian el resultado.
+**Detección de resultados desactualizados.** Cada resultado guarda `problema = (expr, a, b)` y `parametros`: población, generaciones, `pc`, `pm`, `σ`, `k`, `γ`, semilla, nichos y radio (el radio solo cuenta si los nichos están activados). En cada rerun se comparan con los valores actuales. La animación y su velocidad no cuentan, porque no cambian el resultado.
 
 ### 5.3 Animación con Plotly
 
@@ -180,8 +211,10 @@ Ahora `figura_animacion` construye **una sola figura de Plotly** con todas las g
 | 3 · convergencia del mejor valor | 2 | no |
 | 4 · marcador de la generación actual | 2 | sí |
 | 5 · texto “Generación g/G · Mejor histórico…” | 1 | sí |
+| 6 · ◆ mínimos encontrados (solo con nichos) | 1 | sí: vacía salvo en el último cuadro |
 
-- Cada `go.Frame` actualiza solo las trazas 1, 2, 4 y 5 (`traces=[1, 2, 4, 5]`).
+- Cada `go.Frame` actualiza solo las trazas 1, 2, 4, 5 y 6 (`traces=[1, 2, 4, 5, 6]`).
+- Con nichos, debajo de las métricas `mostrar_minimos` muestra la tabla **Mínimos encontrados** (`st.dataframe`: #, x, f(x), individuos en el nicho).
 - **▶ Reproducir** usa `redraw=False` y una transición `cubic-in-out` (70 % de la duración del cuadro), así que los puntos se **desplazan** en lugar de saltar. La duración viene de la barra lateral.
 - Con `redraw=False` Plotly no actualiza el título; por eso el texto de la generación es una traza de texto (5) y no el título.
 - **⏸ Pausa** y **⏮ Inicio** usan `animate` con duración 0; el control **Generación** tiene un paso por cuadro.
@@ -192,7 +225,7 @@ Ahora `figura_animacion` construye **una sola figura de Plotly** con todas las g
 
 ## 6. Verificación
 
-**Pruebas automatizadas** (`pytest`, 85 pruebas, todas pasan):
+**Pruebas automatizadas** (`pytest`, 95 pruebas, todas pasan):
 
 - `test_ag_procesamiento.py`:
   - Los ejemplos y sus variantes (`x^2`, espacios iniciales, `Abs`) se aceptan.
@@ -203,9 +236,11 @@ Ahora `figura_animacion` construye **una sola figura de Plotly** con todas las g
   - Los historiales quedan alineados y dentro del dominio.
   - El elitismo garantiza que el mejor histórico nunca empeora, y la semilla hace los resultados reproducibles.
   - `sigma_decay` y `tournament_k` se aplican, y los casos de error dan mensajes claros.
+  - Nichos: sin ellos el resultado no cambia; encuentran los 2 mínimos del Doble pozo y los 4 globales del Seno; cada mínimo reportado está en el fondo de un valle, ordenado y a más de un radio de los demás; se conserva el mejor histórico; un radio inválido da error.
 - `test_app.py` (con `AppTest`):
   - La pantalla inicial muestra la fórmula y la vista previa, y **Ejecutar** está en el área principal.
   - La ejecución funciona con los valores por defecto y sin semilla.
+  - Nichos desactivados por defecto (radio deshabilitado, sin tabla); activados, la tabla trae los 2 mínimos del Doble pozo y los rombos aparecen solo en el último cuadro; cambiar nichos o radio marca los resultados como desactualizados.
   - La figura trae un cuadro por generación con su texto, los tres botones y un paso del control por cuadro; con 250 generaciones se limita a 100 cuadros (con la 0 y la última).
   - La velocidad cambia la duración de los cuadros sin invalidar los resultados.
   - Al ejecutar se envía el script que inicia la animación; al mover otro control, no.
@@ -267,9 +302,10 @@ Ahora `figura_animacion` construye **una sola figura de Plotly** con todas las g
 | 🟠 **A veces Ejecutar no iniciaba**: con un error en la función, al corregirla y hacer clic directamente en el botón (deshabilitado por el error), el navegador confirmaba el texto y registraba el clic con el botón aún deshabilitado; el clic se perdía y había que pulsar dos veces | El botón ya no se deshabilita. Si se pulsa con un error, no se ejecuta y se muestra un aviso. Prueba de regresión `test_corregir_la_funcion_y_ejecutar_con_un_solo_clic`. |
 | 🟡 Había que pulsar **Ejecutar** y luego **▶ Reproducir** | La animación arranca sola al ejecutar (`reproducir_al_cargar`, §5.3). Verificado en Edge: 81 generaciones en la primera ejecución, con una fórmula nueva sin Enter y al repetir; sin errores de JavaScript, y sin repetirse al cambiar la velocidad. |
 | 🟡 La población se perdía sobre la curva: la paleta por defecto pintaba ambas en azul | Colores fijos en `app.py` (`COLOR_CURVA`, `COLOR_POBLACION`, `COLOR_MEJOR`): curva azul medio, población naranja con borde oscuro y ★ morada con borde blanco; la convergencia usa el azul de la curva y el marcador de la generación, el morado de la ★. |
+| 🟢 **Nuevo:** el AG solo encontraba un mínimo aunque hubiera varios | Modo opcional **Buscar varios mínimos (nichos)** con clearing (§4.3): tabla de mínimos encontrados y rombos en la gráfica. Sin nichos el algoritmo no cambia. |
 | 🟡 README desactualizado, cortado y con enlace a otro repo | Reescrito para el AG, con instalación, uso y pruebas. |
 | 🟢 `__pycache__/` versionado y ruido CRLF/LF en `git status` | `.gitignore` actualizado y `.gitattributes` con `* text=auto`. Los archivos editados quedaron en LF, como en el repo. |
-| 🟢 Sin pruebas | 85 pruebas `pytest`. |
+| 🟢 Sin pruebas | 95 pruebas `pytest`. |
 | 🟢 Streamlit 1.45.1, con `use_container_width` en vías de desaparecer | Actualizado a **Streamlit 1.63.0** (y matplotlib 3.10.8): `use_container_width=True` → `width="stretch"`. El mensaje de éxito usa `icon="✅"`, porque 1.63 separa el emoji inicial del texto. Las pruebas corren sin avisos de deprecación. |
 
 ---

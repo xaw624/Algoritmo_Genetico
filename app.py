@@ -27,6 +27,7 @@ COLOR_CURVA = "#4A6FA5"      # azul medio
 COLOR_POBLACION = "#F28C28"  # naranja, con borde oscuro
 COLOR_BORDE_POBLACION = "#6B3500"
 COLOR_MEJOR = "#7B1FA2"      # morado, con borde blanco
+COLOR_MINIMOS = "#1B5E20"    # verde oscuro: mínimos encontrados con nichos
 
 # Ejemplos: cada uno carga su función y un dominio donde se aprecia bien
 EJEMPLOS = [
@@ -306,7 +307,8 @@ def titulo_generacion(resultado, gen):
 def trazas_generacion(resultado, gen):
     """
     Trazas que cambian en cada cuadro: población, mejor histórico,
-    marcador en la curva de convergencia y texto con la generación.
+    marcador en la curva de convergencia, texto con la generación y
+    mínimos encontrados con nichos (solo en el último cuadro).
     El texto es una traza y no el título porque, al animar sin redibujar
     (redraw=False, necesario para que los puntos se desplacen suavemente),
     Plotly no actualiza el título.
@@ -315,12 +317,14 @@ def trazas_generacion(resultado, gen):
     pop_y = resultado["values_history"][gen]
     valid_pop = np.isfinite(pop_y)
     best_x_hist, best_f_hist = resultado["best_history"][gen]
+    minimos = resultado.get("minimos", []) if gen == len(resultado["history"]) - 1 else []
 
     return [
         go.Scatter(x=population[valid_pop], y=pop_y[valid_pop]),
         go.Scatter(x=[best_x_hist], y=[best_f_hist]),
         go.Scatter(x=[gen], y=[best_f_hist]),
         go.Scatter(text=[titulo_generacion(resultado, gen)]),
+        go.Scatter(x=[m["x"] for m in minimos], y=[m["f"] for m in minimos]),
     ]
 
 
@@ -355,8 +359,8 @@ def figura_animacion(resultado, duracion_ms):
         subplot_titles=("", "Evolución del mejor valor encontrado"),
     )
 
-    # Trazas fijas (0 y 3) y trazas que cambian en cada cuadro (1, 2, 4 y 5)
-    poblacion, mejor, marcador, texto = trazas_generacion(resultado, 0)
+    # Trazas fijas (0 y 3) y trazas que cambian en cada cuadro (1, 2, 4, 5 y 6)
+    poblacion, mejor, marcador, texto, minimos = trazas_generacion(resultado, 0)
     fig.add_trace(
         go.Scatter(x=x_plot, y=y_plot, mode="lines", name=f"f(x) = {resultado['expr']}",
                    line={"width": 2, "color": COLOR_CURVA}, hoverinfo="skip"),
@@ -387,12 +391,18 @@ def figura_animacion(resultado, duracion_ms):
     texto.update(x=[resultado["bounds"][0]], y=[y_max + y_margen], mode="text",
                  textposition="bottom right", textfont={"size": 14}, showlegend=False, hoverinfo="skip")
     fig.add_trace(texto, row=1, col=1)
+    minimos.update(mode="markers", name="Mínimos encontrados",
+                   marker={"size": 15, "symbol": "diamond", "color": COLOR_MINIMOS,
+                           "line": {"width": 1.5, "color": "white"}},
+                   showlegend=bool(resultado.get("minimos")),
+                   hovertemplate="x = %{x:.6f}<br>f(x) = %{y:.6f}<extra>Mínimo encontrado</extra>")
+    fig.add_trace(minimos, row=1, col=1)
 
     fig.frames = [
         go.Frame(
             name=str(gen),
             data=trazas_generacion(resultado, gen),
-            traces=[1, 2, 4, 5],
+            traces=[1, 2, 4, 5, 6],
         )
         for gen in gens
     ]
@@ -489,6 +499,41 @@ def reproducir_al_cargar(id_ejecucion):
     st.html(_JS_REPRODUCIR % int(id_ejecucion), unsafe_allow_javascript=True)
 
 
+def mostrar_minimos(minimos):
+    """
+    Tabla de los mínimos encontrados con nichos, del mejor al peor.
+    """
+    st.subheader("Mínimos encontrados")
+
+    if not minimos:
+        st.info(
+            "Ningún nicho terminó en el fondo de un valle. Prueba con más generaciones, "
+            "más población o un radio distinto.",
+            icon="🔎",
+        )
+        return
+
+    st.dataframe(
+        {
+            "#": list(range(1, len(minimos) + 1)),
+            "x": [m["x"] for m in minimos],
+            "f(x)": [m["f"] for m in minimos],
+            "Individuos en el nicho": [m["individuos"] for m in minimos],
+        },
+        column_config={
+            "x": st.column_config.NumberColumn(format="%.6f"),
+            "f(x)": st.column_config.NumberColumn(format="%.6f"),
+        },
+        hide_index=True,
+        width="stretch",
+    )
+    st.caption(
+        "Cada fila es el mejor individuo de un nicho que quedó en el fondo de un valle. "
+        "Pueden ser mínimos globales o locales: compara sus valores de f(x). "
+        "En la gráfica aparecen como rombos verdes en la última generación."
+    )
+
+
 def mostrar_resultados(resultado, recien_ejecutado, duracion_ms):
     """
     Dibuja los resultados guardados en session_state: la animación
@@ -525,6 +570,9 @@ def mostrar_resultados(resultado, recien_ejecutado, duracion_ms):
 
     with col3:
         st.metric("Generaciones evaluadas", str(total_gens))
+
+    if resultado["parametros"].get("nichos"):
+        mostrar_minimos(resultado.get("minimos", []))
 
     st.button("🗑️ Limpiar resultados", width="stretch", on_click=limpiar_resultados)
 
@@ -586,6 +634,27 @@ sigma = st.sidebar.number_input(
     key="sigma",
     help="Qué tanto se mueve un individuo al mutar, como fracción del ancho del dominio "
     "(0.10 = 10 % del rango).",
+)
+
+nichos = st.sidebar.checkbox(
+    "Buscar varios mínimos (nichos)",
+    value=False,
+    key="nichos",
+    help="Reparte la población entre varios valles en lugar de concentrarla en uno solo. "
+    "Al terminar se muestra una tabla con los mínimos encontrados.",
+)
+
+radio_nicho = st.sidebar.slider(
+    "Radio del nicho",
+    min_value=0.01,
+    max_value=0.30,
+    value=0.05,
+    step=0.01,
+    key="radio_nicho",
+    disabled=not nichos,
+    help="Tamaño de cada nicho como fracción del ancho del dominio (0.05 = 5 % del rango). "
+    "Dentro de ese radio solo el mejor individuo conserva su aptitud. Debe ser menor que "
+    "la distancia entre los mínimos que quieres distinguir.",
 )
 
 with st.sidebar.expander("🔧 Avanzado"):
@@ -721,6 +790,9 @@ parametros_actuales = {
     "tournament_k": int(tournament_k),
     "sigma_decay": sigma_decay,
     "semilla": int(random_state) if usar_semilla else None,
+    "nichos": nichos,
+    # El radio solo cambia el resultado si los nichos están activados
+    "radio_nicho": radio_nicho if nichos else None,
 }
 
 recien_ejecutado = False
@@ -740,6 +812,8 @@ if run_button and problema is not None:
             tournament_k=int(tournament_k),
             sigma_decay=sigma_decay,
             random_state=semilla,
+            niching=nichos,
+            niche_radius=radio_nicho,
         )
 
         with st.spinner("Ejecutando algoritmo genético..."):
@@ -763,6 +837,7 @@ if run_button and problema is not None:
             "best_history": best_history,
             "best_x": best_x,
             "best_f": best_f,
+            "minimos": ag.minimos(),
             "problema": problema_actual,
             "parametros": parametros_actuales,
         }
@@ -818,6 +893,8 @@ with st.expander("ℹ️ Cómo usar el simulador", expanded=False):
         4. La animación arranca sola. **⏸ Pausa** la detiene, **▶ Reproducir** la continúa
            y **⏮ Inicio** vuelve a la generación 0.
         5. Ajusta los parámetros del algoritmo y la velocidad de la animación en la **barra lateral**.
+        6. Para encontrar **varios mínimos** a la vez, activa *Buscar varios mínimos (nichos)*:
+           al terminar aparece una tabla con los mínimos encontrados.
 
         **Sintaxis:** {AYUDA_SINTAXIS}
 
@@ -828,6 +905,7 @@ with st.expander("ℹ️ Cómo usar el simulador", expanded=False):
         - El control *Generación* debajo de la gráfica permite revisar cualquier generación;
           el círculo en la gráfica de convergencia marca la generación mostrada.
         - Al pasar el mouse sobre un punto se ven sus valores de x y f(x).
+        - Con nichos, los rombos verdes de la última generación marcan los mínimos encontrados.
         - Los resultados se conservan hasta la siguiente simulación o hasta pulsar *Limpiar resultados*.
           Si cambias un parámetro, aparece un aviso para volver a ejecutar.
         """
@@ -889,6 +967,21 @@ with st.expander("🧬 Fundamento teórico del algoritmo genético", expanded=Fa
     P^{(0)}, P^{(1)}, \dots, P^{(T)}
     $$
 
+    ### 8. Nichos: varios mínimos (opcional)
+    Sin nichos, la selección y el cruce concentran a la población en un solo valle, aunque la función tenga
+    varios mínimos igual de buenos. Con la opción *Buscar varios mínimos* se aplica **clearing**
+    (Pétrowski, 1996): en cada generación se recorren los individuos del mejor al peor; el primero que no
+    haya sido despejado **gana su nicho**, y todos los demás a distancia menor que el radio $r$ pierden su aptitud:
+    $$
+    |x_j - x_{ganador}| < r \;\Rightarrow\; \text{aptitud}(x_j) = -\infty
+    $$
+    Así no ganan torneos y la población no puede amontonarse en un solo valle. El elitismo conserva al
+    ganador de cada nicho (como máximo la mitad de la población), de modo que ningún mínimo encontrado se pierde.
+
+    Al terminar, un ganador se reporta como **mínimo** solo si está en el fondo de un valle:
+    $f(x) \le f(x \pm r/2)$ (en el borde del dominio solo se mira el lado interior). Los mínimos reportados
+    pueden ser globales o locales; la tabla permite comparar sus valores.
+
     ## Interpretación de los parámetros
 
     - **Función $$ f(x) $$**  
@@ -938,9 +1031,14 @@ with st.expander("🧬 Fundamento teórico del algoritmo genético", expanded=Fa
       Para una misma semilla y los mismos parámetros, la ejecución produce la misma trayectoria evolutiva.  
       Si se desactiva *Fijar semilla aleatoria*, cada ejecución sigue una trayectoria distinta.
 
-    - **Velocidad de la animación** (barra lateral → Visualización)
-      Define la rapidez de la animación: lenta, normal o rápida.
-      Solo modifica la representación visual del proceso evolutivo; no altera el comportamiento del algoritmo.
+    - **Buscar varios mínimos (nichos)** y **radio del nicho $r$**  
+      Activan el clearing descrito arriba. El radio se da como fracción del ancho del dominio (por defecto 0.05),
+      $r = r_{relativo}(b-a)$, y debe ser menor que la distancia entre los mínimos que se quieren distinguir.
+      Conviene una población mayor: la mitad puede quedar ocupada por los ganadores de nicho.
+
+    - **Velocidad de la animación** (barra lateral → Visualización)  
+      Define la rapidez de la animación: lenta, normal o rápida.  
+      Solo modifica la representación visual del proceso evolutivo; no altera el comportamiento del algoritmo.  
       Si hay más de 100 generaciones, la animación muestra 100 de ellas espaciadas uniformemente.
 
     ## Interpretación de la visualización
@@ -951,6 +1049,7 @@ with st.expander("🧬 Fundamento teórico del algoritmo genético", expanded=Fa
     - La gráfica de evolución complementaria muestra la sucesión del mejor valor histórico de $ f(x) $ a lo largo de las generaciones.
     - La animación arranca sola al ejecutar y se reproduce en el navegador; los botones **▶ Reproducir**, **⏸ Pausa** y **⏮ Inicio** la controlan.
     - El control **Generación** permite revisar cualquier generación; el círculo de la gráfica de evolución marca la generación mostrada.
+    - Con nichos, los **rombos verdes** de la última generación marcan los mínimos encontrados, que también se listan en una tabla.
 
     ## Observación metodológica
     El algoritmo genético es un método heurístico y estocástico.  

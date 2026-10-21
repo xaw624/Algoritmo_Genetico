@@ -137,6 +137,68 @@ def test_sin_individuos_validos_da_error_claro():
 
 
 # -----------------------------------------------------------
+# Nichos (varios mínimos)
+# -----------------------------------------------------------
+def test_sin_nichos_no_hay_minimos_ni_cambia_el_resultado():
+    ag, r1 = correr("(x**2 - 1)**2", bounds=(-2, 2))
+    _, r2 = correr("(x**2 - 1)**2", bounds=(-2, 2), niching=False, niche_radius=0.2)
+    assert ag.minimos() == [] and ag.niche_history == []
+    assert r1[0] == r2[0] and r1[1] == r2[1]
+
+
+def test_nichos_encuentran_los_dos_minimos_del_doble_pozo():
+    ag, _ = correr("(x**2 - 1)**2", bounds=(-2, 2), niching=True, niche_radius=0.05)
+    xs = sorted(m["x"] for m in ag.minimos() if m["f"] < 1e-4)
+    assert len(xs) == 2
+    assert xs[0] == pytest.approx(-1, abs=0.01) and xs[1] == pytest.approx(1, abs=0.01)
+
+
+def test_nichos_encuentran_varios_minimos_globales_del_seno():
+    # sin(2πx/3) en [-6, 6] tiene 4 mínimos globales (-1) en x = -3.75, -0.75, 2.25, 5.25
+    ag, _ = correr("sin(2*pi*x/3)", bounds=(-6, 6), niching=True, niche_radius=0.05)
+    globales = sorted(m["x"] for m in ag.minimos() if m["f"] < -0.99)
+    esperados = [-3.75, -0.75, 2.25, 5.25]
+    assert len(globales) == 4
+    for x, esperado in zip(globales, esperados):
+        assert x == pytest.approx(esperado, abs=0.05)
+
+
+@pytest.mark.parametrize("expr,bounds", [
+    ("x**2 + 10*cos(2*x) + x*sin(5*x)", (-10, 10)),
+    ("0.3*sin(8*x) + 0.7*cos(15*x)", (-2, 2)),
+])
+def test_los_minimos_reportados_estan_en_el_fondo_de_un_valle(expr, bounds):
+    ag, _ = correr(expr, bounds=bounds, niching=True, niche_radius=0.05)
+    minimos = ag.minimos()
+    assert minimos
+    f = build_function(expr)
+    paso = 0.05 * (bounds[1] - bounds[0]) / 2
+    for m in minimos:
+        for vecino in (m["x"] - paso, m["x"] + paso):
+            vecino = min(max(vecino, bounds[0]), bounds[1])
+            assert f(vecino) >= m["f"]
+        assert m["individuos"] >= 1
+    # Ordenados del mejor al peor y sin repetir nicho
+    assert [m["f"] for m in minimos] == sorted(m["f"] for m in minimos)
+    xs = sorted(m["x"] for m in minimos)
+    assert all(b - a >= ag.niche_radius for a, b in zip(xs, xs[1:]))
+
+
+def test_nichos_conservan_el_mejor_historico():
+    ag, (best_x, best_f, _, best_history) = correr(
+        "x**2 + 10*cos(2*x) + x*sin(5*x)", niching=True, niche_radius=0.05
+    )
+    mejores = [b for _, b in best_history]
+    assert all(b <= a for a, b in zip(mejores, mejores[1:]))
+    assert ag.minimos()[0]["f"] == pytest.approx(best_f, abs=1e-6)
+
+
+def test_radio_de_nicho_invalido():
+    with pytest.raises(ValueError, match="radio del nicho"):
+        GeneticAlgorithm1D(build_function("x"), (0, 1), niching=True, niche_radius=0)
+
+
+# -----------------------------------------------------------
 # ^ como potencia y LaTeX
 # -----------------------------------------------------------
 @pytest.mark.parametrize("expr", ["9^9^9", "9^9^9 + x", "x + 9^(9^9)"])

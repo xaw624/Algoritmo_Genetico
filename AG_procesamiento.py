@@ -176,6 +176,8 @@ class GeneticAlgorithm1D:
         tournament_k=3,
         sigma_decay=0.99,
         random_state=None,
+        niching=False,
+        niche_radius=0.05,
     ):
         """
         Parámetros:
@@ -189,6 +191,9 @@ class GeneticAlgorithm1D:
         - tournament_k: tamaño del torneo para selección
         - sigma_decay: factor de enfriamiento de sigma por generación
         - random_state: semilla opcional para reproducibilidad
+        - niching: si es True, usa nichos por "clearing" para buscar
+          varios mínimos a la vez (ver _clearing)
+        - niche_radius: radio de cada nicho, relativo al dominio
         """
 
         # Función objetivo
@@ -220,6 +225,13 @@ class GeneticAlgorithm1D:
         self.sigma = self.initial_sigma
         self.sigma_decay = float(sigma_decay)
 
+        # Nichos: radio absoluto y máximo de ganadores que pasan por elitismo
+        if niching and not 0 < niche_radius <= 1:
+            raise ValueError("El radio del nicho debe estar entre 0 y 1.")
+        self.niching = bool(niching)
+        self.niche_radius = float(niche_radius) * domain_size
+        self.max_elites = max(1, self.pop_size // 2)
+
         # Generador aleatorio moderno de NumPy
         self.rng = np.random.default_rng(random_state)
 
@@ -233,6 +245,8 @@ class GeneticAlgorithm1D:
         self.history = []         # Guarda la población de cada generación
         self.values_history = []  # Guarda f(x) de cada población (+inf si no es válido)
         self.best_history = []    # Guarda (best_x, best_f) por generación
+        self.niche_history = []   # Con nichos: índices de los ganadores de cada generación
+        self.niche_winners = []   # Con nichos: ganadores de la generación actual
 
     def initialize_population(self):
         """
@@ -265,6 +279,10 @@ class GeneticAlgorithm1D:
         # Fitness: como el AG selecciona "mayor fitness", usamos -f(x)
         self.fitness = -values
 
+        if self.niching:
+            self.fitness, self.niche_winners = self._clearing(values)
+            self.niche_history.append(np.array(self.niche_winners, dtype=int))
+
         # Mejor individuo de la generación actual
         idx = np.argmin(values)
         gen_best_x = float(self.population[idx]) # type: ignore
@@ -279,6 +297,69 @@ class GeneticAlgorithm1D:
         self.history.append(self.population.copy()) # type: ignore
         self.values_history.append(values)
         self.best_history.append((self.best_x, self.best_f))
+
+    def _clearing(self, values):
+        """
+        Nichos por "clearing" (Pétrowski, 1996).
+
+        Se recorren los individuos del mejor al peor. El primero que no
+        haya sido "despejado" gana su nicho, y todos los demás que estén a
+        menos de `niche_radius` de él pierden su aptitud (-inf): no ganan
+        torneos. Así la población no puede amontonarse en un solo valle y
+        se reparte entre varios mínimos.
+
+        Devuelve (fitness, índices de los ganadores ordenados del mejor al peor).
+        """
+        fitness = -values.copy()
+        despejado = np.zeros(len(values), dtype=bool)
+        ganadores = []
+
+        for i in np.argsort(values, kind="stable"):
+            if despejado[i] or not np.isfinite(values[i]):
+                continue
+            ganadores.append(int(i))
+            cerca = np.abs(self.population - self.population[i]) < self.niche_radius  # type: ignore
+            cerca[i] = False
+            despejado |= cerca
+
+        fitness[despejado] = -np.inf
+        return fitness, ganadores
+
+    def _es_valle(self, x, fx):
+        """
+        ¿Está x en el fondo de un valle? Se compara f(x) con f a medio radio
+        de distancia a cada lado; en el borde del dominio solo se mira el lado
+        interior. Los ganadores de nicho que quedan sobre una ladera no pasan.
+        """
+        paso = self.niche_radius / 2
+        for vecino in (x - paso, x + paso):
+            vecino = min(max(vecino, self.a), self.b)
+            if vecino != x and self.evaluate_individual(vecino) < fx:
+                return False
+        return True
+
+    def minimos(self):
+        """
+        Con nichos: mínimos encontrados en la última generación, del mejor al
+        peor. Cada uno es un dict con x, f e individuos (cuántos hay en su nicho).
+
+        Solo se incluyen los ganadores de nicho que están en el fondo de un
+        valle (_es_valle): el clearing también deja ganadores repartidos sobre
+        las laderas, a un radio de distancia entre sí, que no son mínimos.
+        Sin nichos devuelve una lista vacía.
+        """
+        if not self.niching or not self.history:
+            return []
+
+        poblacion, valores = self.history[-1], self.values_history[-1]
+        resultado = []
+        for i in self.niche_history[-1]:
+            x, fx = float(poblacion[i]), float(valores[i])
+            if not self._es_valle(x, fx):
+                continue
+            en_nicho = np.abs(poblacion - x) < self.niche_radius
+            resultado.append({"x": x, "f": fx, "individuos": int(en_nicho.sum())})
+        return resultado
 
     def select_parent(self):
         """
@@ -320,8 +401,13 @@ class GeneticAlgorithm1D:
         if self.best_x is None:
             raise RuntimeError("Debes evaluar la población antes de llamar a step().")
 
-        # Elitismo: conservar al mejor histórico
-        new_population = [self.best_x]
+        # Elitismo: conservar al mejor histórico. Con nichos se conserva al
+        # ganador de cada nicho (como máximo la mitad de la población) para
+        # que ningún mínimo encontrado se pierda.
+        if self.niching:
+            new_population = [float(self.population[i]) for i in self.niche_winners[: self.max_elites]]  # type: ignore
+        else:
+            new_population = [self.best_x]
 
         # Completar la nueva población
         while len(new_population) < self.pop_size:
@@ -358,6 +444,8 @@ class GeneticAlgorithm1D:
         self.history = []
         self.values_history = []
         self.best_history = []
+        self.niche_history = []
+        self.niche_winners = []
         self.sigma = self.initial_sigma
 
         # 1) Población inicial
