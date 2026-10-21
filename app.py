@@ -394,6 +394,8 @@ def figura_animacion(resultado, duracion_ms):
     }
 
     fig.update_layout(
+        # Identifica la figura de cada ejecución (lo usa _JS_REPRODUCIR)
+        meta={"ejecucion": resultado["id"]},
         height=ALTO_GRAFICA + 320,
         margin={"t": 100, "b": 130},
         legend={"orientation": "h", "y": 1.0, "yanchor": "bottom", "x": 1, "xanchor": "right"},
@@ -433,6 +435,47 @@ def figura_animacion(resultado, duracion_ms):
     return fig
 
 
+# Pulsa "▶ Reproducir" de la animación en cuanto Plotly termina de dibujarla.
+# Plotly no tiene una opción para que una animación arranque sola; así basta
+# con pulsar Ejecutar simulación. El script es fijo (solo se le inserta el id
+# numérico de la ejecución) y se envía únicamente justo después de ejecutar,
+# así que mover otros controles no vuelve a reproducir la animación.
+_JS_REPRODUCIR = """
+<script>
+(() => {
+  const ejecucion = %d;
+  if (window.__agAnimacionReproducida === ejecucion) return;
+  const inicio = Date.now();
+  const intentar = () => {
+    // Solo la figura de esta ejecución: mientras se dibuja la nueva, la de la
+    // ejecución anterior sigue un momento en la página.
+    const graficas = [...document.querySelectorAll(".js-plotly-plot")];
+    const grafica = graficas.find(
+      (g) => g.layout && g.layout.meta && g.layout.meta.ejecucion === ejecucion
+    );
+    const boton = grafica && [...grafica.querySelectorAll(".updatemenu-button")].find(
+      (b) => b.textContent.includes("Reproducir")
+    );
+    if (boton) {
+      window.__agAnimacionReproducida = ejecucion;
+      boton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    } else if (Date.now() - inicio < 15000) {
+      setTimeout(intentar, 100);
+    }
+  };
+  intentar();
+})();
+</script>
+"""
+
+
+def reproducir_al_cargar(id_ejecucion):
+    """
+    Inicia la animación automáticamente (ver _JS_REPRODUCIR).
+    """
+    st.html(_JS_REPRODUCIR % int(id_ejecucion), unsafe_allow_javascript=True)
+
+
 def mostrar_resultados(resultado, recien_ejecutado, duracion_ms):
     """
     Dibuja los resultados guardados en session_state: la animación
@@ -442,7 +485,7 @@ def mostrar_resultados(resultado, recien_ejecutado, duracion_ms):
     a, b = resultado["bounds"]
 
     if recien_ejecutado:
-        st.success("Simulación completada. Pulsa **▶ Reproducir** para ver la evolución.", icon="✅")
+        st.success("Simulación completada.", icon="✅")
 
     st.plotly_chart(
         figura_animacion(resultado, duracion_ms),
@@ -450,6 +493,9 @@ def mostrar_resultados(resultado, recien_ejecutado, duracion_ms):
         key=f"animacion_{resultado['id']}",
         config={"displaylogo": False},
     )
+
+    if recien_ejecutado:
+        reproducir_al_cargar(resultado["id"])
 
     st.caption(
         f"Resultados para f(x) = `{resultado['expr']}` en [{a}, {b}]"
@@ -576,7 +622,7 @@ velocidad = st.sidebar.radio(
     index=1,
     horizontal=True,
     key="velocidad",
-    help="Velocidad del botón ▶ Reproducir de la gráfica. "
+    help="Velocidad de la animación (al ejecutar y con el botón ▶ Reproducir). "
     f"Se muestran como máximo {MAX_FRAMES_ANIMACION} generaciones.",
 )
 
@@ -756,7 +802,7 @@ with st.expander("ℹ️ Cómo usar el simulador", expanded=False):
         2. **Ajusta el dominio** [a, b]. La fórmula interpretada aparece debajo; si hay un
            error, se indica ahí mismo.
         3. Revisa la **vista previa** de la curva y pulsa **▶️ Ejecutar simulación**.
-        4. Pulsa **▶ Reproducir** en la gráfica para ver la evolución; **⏸ Pausa** la detiene
+        4. La animación arranca sola. **⏸ Pausa** la detiene, **▶ Reproducir** la continúa
            y **⏮ Inicio** vuelve a la generación 0.
         5. Ajusta los parámetros del algoritmo y la velocidad de la animación en la **barra lateral**.
 
@@ -880,7 +926,7 @@ with st.expander("🧬 Fundamento teórico del algoritmo genético", expanded=Fa
       Si se desactiva *Fijar semilla aleatoria*, cada ejecución sigue una trayectoria distinta.
 
     - **Velocidad de la animación** (barra lateral → Visualización)
-      Define la rapidez del botón ▶ Reproducir: lenta, normal o rápida.
+      Define la rapidez de la animación: lenta, normal o rápida.
       Solo modifica la representación visual del proceso evolutivo; no altera el comportamiento del algoritmo.
       Si hay más de 100 generaciones, la animación muestra 100 de ellas espaciadas uniformemente.
 
@@ -890,7 +936,7 @@ with st.expander("🧬 Fundamento teórico del algoritmo genético", expanded=Fa
     - Los **puntos** representan la población en una generación dada.
     - La **estrella** señala el mejor individuo histórico encontrado hasta ese instante.
     - La gráfica de evolución complementaria muestra la sucesión del mejor valor histórico de $ f(x) $ a lo largo de las generaciones.
-    - Los botones **▶ Reproducir**, **⏸ Pausa** y **⏮ Inicio** controlan la animación, que se reproduce en el navegador.
+    - La animación arranca sola al ejecutar y se reproduce en el navegador; los botones **▶ Reproducir**, **⏸ Pausa** y **⏮ Inicio** la controlan.
     - El control **Generación** permite revisar cualquier generación; el círculo de la gráfica de evolución marca la generación mostrada.
 
     ## Observación metodológica

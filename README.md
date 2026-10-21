@@ -8,7 +8,7 @@ Aplicación web interactiva construida con [Streamlit](https://streamlit.io/) qu
 - 13 ejemplos que cargan la función con su dominio sugerido y una descripción: funciones multimodales, con mínimos en el borde, sin derivada en el mínimo, etc.
 - Vista previa de f(x) antes de ejecutar.
 - Control de todos los parámetros del AG: población, generaciones, `pc`, `pm`, `σ` relativo, enfriamiento de `σ`, tamaño del torneo y semilla.
-- Animación con Plotly que se reproduce en el navegador: botones ▶ Reproducir / ⏸ Pausa / ⏮ Inicio, velocidad lenta, normal o rápida, control para revisar cualquier generación y valores al pasar el mouse.
+- Animación con Plotly que arranca sola al ejecutar y se reproduce en el navegador: botones ▶ Reproducir / ⏸ Pausa / ⏮ Inicio, velocidad lenta, normal o rápida, control para revisar cualquier generación y valores al pasar el mouse.
 - Aviso cuando los resultados mostrados ya no corresponden a los parámetros actuales.
 - Gráfica de convergencia del mejor valor encontrado, sincronizada con la animación.
 - Explicación teórica del método (en LaTeX) dentro de la app.
