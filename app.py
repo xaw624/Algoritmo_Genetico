@@ -21,6 +21,13 @@ VELOCIDADES = {"Lenta": 250, "Normal": 100, "Rápida": 40}
 # Altura de la vista previa y de la gráfica de la población en la animación (px)
 ALTO_GRAFICA = 620
 
+# Colores de las gráficas. Se fijan aquí porque la paleta por defecto pinta la
+# población en un azul claro casi igual al de la curva y se perdía sobre ella.
+COLOR_CURVA = "#4A6FA5"      # azul medio
+COLOR_POBLACION = "#F28C28"  # naranja, con borde oscuro
+COLOR_BORDE_POBLACION = "#6B3500"
+COLOR_MEJOR = "#7B1FA2"      # morado, con borde blanco
+
 # Ejemplos: cada uno carga su función y un dominio donde se aprecia bien
 EJEMPLOS = [
     {
@@ -260,7 +267,7 @@ def figura_vista_previa(problema, expr, a, b):
             y=problema["y_plot"],
             mode="lines",
             name=f"f(x) = {expr}",
-            line={"width": 2},
+            line={"width": 2, "color": COLOR_CURVA},
             showlegend=True,
         )
     )
@@ -352,23 +359,29 @@ def figura_animacion(resultado, duracion_ms):
     poblacion, mejor, marcador, texto = trazas_generacion(resultado, 0)
     fig.add_trace(
         go.Scatter(x=x_plot, y=y_plot, mode="lines", name=f"f(x) = {resultado['expr']}",
-                   line={"width": 2}, hoverinfo="skip"),
+                   line={"width": 2, "color": COLOR_CURVA}, hoverinfo="skip"),
         row=1, col=1,
     )
-    poblacion.update(mode="markers", name="Población", marker={"size": 9, "opacity": 0.85},
+    poblacion.update(mode="markers", name="Población",
+                     marker={"size": 11, "color": COLOR_POBLACION, "opacity": 0.9,
+                             "line": {"width": 1.5, "color": COLOR_BORDE_POBLACION}},
                      hovertemplate="x = %{x:.4f}<br>f(x) = %{y:.4f}<extra>Individuo</extra>")
     fig.add_trace(poblacion, row=1, col=1)
     mejor.update(mode="markers", name="Mejor histórico",
-                 marker={"size": 20, "symbol": "star", "line": {"width": 1, "color": "white"}},
+                 marker={"size": 22, "symbol": "star", "color": COLOR_MEJOR,
+                         "line": {"width": 1.5, "color": "white"}},
                  hovertemplate="x = %{x:.6f}<br>f(x) = %{y:.6f}<extra>Mejor histórico</extra>")
     fig.add_trace(mejor, row=1, col=1)
     fig.add_trace(
         go.Scatter(x=list(range(total_gens + 1)), y=best_values, mode="lines+markers",
-                   name="Mejor f(x) histórico", marker={"size": 4}, showlegend=False,
+                   name="Mejor f(x) histórico", line={"color": COLOR_CURVA},
+                   marker={"size": 4, "color": COLOR_CURVA}, showlegend=False,
                    hovertemplate="Generación %{x}<br>f(x) = %{y:.6f}<extra></extra>"),
         row=2, col=1,
     )
-    marcador.update(mode="markers", marker={"size": 12, "symbol": "circle-open", "line": {"width": 3}},
+    marcador.update(mode="markers",
+                    marker={"size": 13, "symbol": "circle-open", "color": COLOR_MEJOR,
+                            "line": {"width": 3, "color": COLOR_MEJOR}},
                     showlegend=False, hoverinfo="skip")
     fig.add_trace(marcador, row=2, col=1)
     texto.update(x=[resultado["bounds"][0]], y=[y_max + y_margen], mode="text",
