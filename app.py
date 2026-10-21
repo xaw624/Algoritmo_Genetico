@@ -1,9 +1,7 @@
-import io
-import time
-
-import matplotlib.pyplot as plt
 import numpy as np
+import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 
 from AG_procesamiento import (
     MAX_LONGITUD_EXPRESION,
@@ -13,12 +11,15 @@ from AG_procesamiento import (
 )
 
 
-# Máximo de imágenes en la animación. Con más generaciones se muestran
+# Máximo de cuadros en la animación. Con más generaciones se muestran
 # generaciones espaciadas uniformemente (siempre la 0 y la última).
 MAX_FRAMES_ANIMACION = 100
 
-# Pausa entre frames de la animación (ms)
-VELOCIDADES = {"Lenta": 250, "Normal": 80, "Rápida": 15}
+# Duración de cada cuadro de la animación (ms)
+VELOCIDADES = {"Lenta": 250, "Normal": 100, "Rápida": 40}
+
+# Altura de la vista previa y de la gráfica de la población en la animación (px)
+ALTO_GRAFICA = 620
 
 # Ejemplos: cada uno carga su función y un dominio donde se aprecia bien
 EJEMPLOS = [
@@ -249,224 +250,222 @@ def evaluar_problema(expr, a, b):
         return None, str(e)
 
 
-@st.cache_data(show_spinner=False, max_entries=32)
-def imagen_vista_previa(expr, a, b):
+def figura_vista_previa(problema, expr, a, b):
     """
-    Curva de f(x) antes de ejecutar, como PNG.
-    Mismo tamaño que la animación para que la página no salte al ejecutar.
+    Curva de f(x) antes de ejecutar.
     """
-    problema = preparar_problema(expr, a, b)
-    x_plot, y_plot = problema["x_plot"], problema["y_plot"]
-    valid = np.isfinite(y_plot)
+    fig = go.Figure(
+        go.Scatter(
+            x=problema["x_plot"],
+            y=problema["y_plot"],
+            mode="lines",
+            name=f"f(x) = {expr}",
+            line={"width": 2},
+            showlegend=True,
+        )
+    )
+    fig.update_layout(
+        title="Vista previa: pulsa Ejecutar para lanzar la población",
+        height=ALTO_GRAFICA,
+        legend={"orientation": "h", "y": 1.02, "yanchor": "bottom", "x": 1, "xanchor": "right"},
+        margin={"t": 70},
+    )
+    fig.update_xaxes(title_text="x", range=[a, b])
+    fig.update_yaxes(title_text="f(x)")
+    return fig
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(x_plot[valid], y_plot[valid], linewidth=2, alpha=0.75, label=f"f(x) = {expr}")
-    ax.set_xlim(a, b)
-    ax.set_xlabel("x")
-    ax.set_ylabel("f(x)")
-    ax.set_title("Vista previa: pulsa Ejecutar para lanzar la población")
-    ax.grid(True, linestyle="--", alpha=0.4)
-    ax.legend(loc="upper right")
-    fig.tight_layout()
 
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=100)
-    plt.close(fig)
-    return buf.getvalue()
-
-
-def crear_figura(resultado):
+def generaciones_animadas(total_gens):
     """
-    Crea la figura con la curva de f(x) y devuelve los elementos
-    que cambian entre generaciones.
+    Generaciones que se incluyen como cuadros de la animación.
     """
-    x_plot = resultado["x_plot"]
-    y_plot = resultado["y_plot"]
-    valid_curve = np.isfinite(y_plot)
-
-    # Rango del eje Y: curva + todos los valores válidos de la población
-    all_y_values = [y_plot[valid_curve]]
-    for values in resultado["values_history"]:
-        all_y_values.append(values[np.isfinite(values)])
-    all_y_values = np.concatenate(all_y_values)
-
-    y_min = float(all_y_values.min())
-    y_max = float(all_y_values.max())
-    y_range = max(y_max - y_min, 1e-6)
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    # Curva de la función
-    ax.plot(
-        x_plot[valid_curve],
-        y_plot[valid_curve],
-        linewidth=2,
-        alpha=0.75,
-        label=f"f(x) = {resultado['expr']}",
+    return np.unique(
+        np.linspace(0, total_gens, min(total_gens + 1, MAX_FRAMES_ANIMACION)).round().astype(int)
     )
 
-    # Scatter de la población actual
-    population_scatter = ax.scatter([], [], s=55, zorder=4, label="Población")
 
-    # Scatter del mejor histórico
-    best_scatter = ax.scatter([], [], s=160, marker="*", zorder=5, label="Mejor histórico")
-
-    ax.set_xlim(*resultado["bounds"])
-    ax.set_ylim(y_min - 0.1 * y_range, y_max + 0.1 * y_range)
-    ax.set_xlabel("x")
-    ax.set_ylabel("f(x)")
-    ax.set_title("Algoritmo Genético 1D - Generación 0")
-    ax.grid(True, linestyle="--", alpha=0.4)
-    ax.legend(loc="upper right")
-
-    # Márgenes calculados una sola vez (con título, para reservarle espacio)
-    fig.tight_layout()
-
-    # Blitting: el fondo (curva, ejes, rejilla, leyenda) se dibuja una sola vez
-    # y en cada frame solo se repintan los puntos y el título.
-    # Redibujar la figura completa por frame era lo más lento de la animación.
-    ax.set_title("")
-    fig.canvas.draw()
-    fondo = fig.canvas.copy_from_bbox(fig.bbox)
-
-    return fig, ax, population_scatter, best_scatter, fondo
-
-
-def renderizar_generacion(figura, resultado, gen):
+def titulo_generacion(resultado, gen):
     """
-    Actualiza la figura con la población de la generación `gen`
-    y la devuelve como arreglo RGB para st.image.
-    """
-    fig, ax, population_scatter, best_scatter, fondo = figura
-    fig.canvas.restore_region(fondo)
-
-    # Población visible (solo los individuos con f(x) finito)
-    population = resultado["history"][gen]
-    pop_y = resultado["values_history"][gen]
-    valid_pop = np.isfinite(pop_y)
-    population_scatter.set_offsets(np.column_stack((population[valid_pop], pop_y[valid_pop])))
-
-    # Mejor histórico
-    best_x_hist, best_f_hist = resultado["best_history"][gen]
-    best_scatter.set_offsets([[best_x_hist, best_f_hist]])
-
-    ax.set_title(f"Algoritmo Genético 1D - Generación {gen}")
-
-    # La leyenda se repinta al final para que quede encima de los puntos
-    for artista in (population_scatter, best_scatter, ax.get_legend(), ax.title):
-        fig.draw_artist(artista)
-
-    return np.asarray(fig.canvas.buffer_rgba())[..., :3].copy()
-
-
-def texto_estado(resultado, gen):
-    """
-    Texto con la generación mostrada y el mejor histórico hasta ella.
+    Título con la generación mostrada y el mejor histórico hasta ella.
     """
     total = len(resultado["history"]) - 1
     best_x_hist, best_f_hist = resultado["best_history"][gen]
     return (
-        f"Generación {gen}/{total}  |  "
+        f"Generación {gen}/{total}  ·  "
         f"Mejor histórico: x = {best_x_hist:.6f}, f(x) = {best_f_hist:.6f}"
     )
 
 
-def mostrar_resultados(resultado, recien_ejecutado, animar, frame_delay):
+def trazas_generacion(resultado, gen):
     """
-    Dibuja los resultados guardados en session_state.
-    Si la simulación se acaba de ejecutar y animar=True reproduce la animación;
-    si no, muestra la generación elegida en el slider sin repetirla.
+    Trazas que cambian en cada cuadro: población, mejor histórico,
+    marcador en la curva de convergencia y texto con la generación.
+    El texto es una traza y no el título porque, al animar sin redibujar
+    (redraw=False, necesario para que los puntos se desplacen suavemente),
+    Plotly no actualiza el título.
+    """
+    population = resultado["history"][gen]
+    pop_y = resultado["values_history"][gen]
+    valid_pop = np.isfinite(pop_y)
+    best_x_hist, best_f_hist = resultado["best_history"][gen]
+
+    return [
+        go.Scatter(x=population[valid_pop], y=pop_y[valid_pop]),
+        go.Scatter(x=[best_x_hist], y=[best_f_hist]),
+        go.Scatter(x=[gen], y=[best_f_hist]),
+        go.Scatter(text=[titulo_generacion(resultado, gen)]),
+    ]
+
+
+def figura_animacion(resultado, duracion_ms):
+    """
+    Figura de Plotly con la evolución de la población.
+
+    Todas las generaciones se envían al navegador como cuadros (frames) y
+    Plotly las reproduce ahí, con sus propios botones y control deslizante.
+    Antes la animación era un ciclo en el servidor que mandaba una imagen por
+    cuadro: cualquier re-ejecución de Streamlit lo interrumpía y, a través de
+    la red, los cuadros llegaban tarde o no se veían.
+    """
+    total_gens = len(resultado["history"]) - 1
+    gens = generaciones_animadas(total_gens)
+    x_plot, y_plot = resultado["x_plot"], resultado["y_plot"]
+    best_values = [best_f_hist for _, best_f_hist in resultado["best_history"]]
+
+    # Rango del eje Y: curva + todos los valores válidos de la población
+    all_y_values = np.concatenate(
+        [y_plot[np.isfinite(y_plot)]]
+        + [values[np.isfinite(values)] for values in resultado["values_history"]]
+    )
+    y_min, y_max = float(all_y_values.min()), float(all_y_values.max())
+    y_margen = 0.1 * max(y_max - y_min, 1e-6)
+
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        row_heights=[0.68, 0.32],
+        vertical_spacing=0.13,
+        subplot_titles=("", "Evolución del mejor valor encontrado"),
+    )
+
+    # Trazas fijas (0 y 3) y trazas que cambian en cada cuadro (1, 2, 4 y 5)
+    poblacion, mejor, marcador, texto = trazas_generacion(resultado, 0)
+    fig.add_trace(
+        go.Scatter(x=x_plot, y=y_plot, mode="lines", name=f"f(x) = {resultado['expr']}",
+                   line={"width": 2}, hoverinfo="skip"),
+        row=1, col=1,
+    )
+    poblacion.update(mode="markers", name="Población", marker={"size": 9, "opacity": 0.85},
+                     hovertemplate="x = %{x:.4f}<br>f(x) = %{y:.4f}<extra>Individuo</extra>")
+    fig.add_trace(poblacion, row=1, col=1)
+    mejor.update(mode="markers", name="Mejor histórico",
+                 marker={"size": 20, "symbol": "star", "line": {"width": 1, "color": "white"}},
+                 hovertemplate="x = %{x:.6f}<br>f(x) = %{y:.6f}<extra>Mejor histórico</extra>")
+    fig.add_trace(mejor, row=1, col=1)
+    fig.add_trace(
+        go.Scatter(x=list(range(total_gens + 1)), y=best_values, mode="lines+markers",
+                   name="Mejor f(x) histórico", marker={"size": 4}, showlegend=False,
+                   hovertemplate="Generación %{x}<br>f(x) = %{y:.6f}<extra></extra>"),
+        row=2, col=1,
+    )
+    marcador.update(mode="markers", marker={"size": 12, "symbol": "circle-open", "line": {"width": 3}},
+                    showlegend=False, hoverinfo="skip")
+    fig.add_trace(marcador, row=2, col=1)
+    texto.update(x=[resultado["bounds"][0]], y=[y_max + y_margen], mode="text",
+                 textposition="bottom right", textfont={"size": 14}, showlegend=False, hoverinfo="skip")
+    fig.add_trace(texto, row=1, col=1)
+
+    fig.frames = [
+        go.Frame(
+            name=str(gen),
+            data=trazas_generacion(resultado, gen),
+            traces=[1, 2, 4, 5],
+        )
+        for gen in gens
+    ]
+
+    cuadro_inmediato = {"frame": {"duration": 0, "redraw": False}, "mode": "immediate",
+                        "transition": {"duration": 0}}
+    reproducir = {
+        "frame": {"duration": duracion_ms, "redraw": False},
+        "fromcurrent": True,
+        "mode": "immediate",
+        "transition": {"duration": int(duracion_ms * 0.7), "easing": "cubic-in-out"},
+    }
+
+    fig.update_layout(
+        height=ALTO_GRAFICA + 320,
+        margin={"t": 100, "b": 130},
+        legend={"orientation": "h", "y": 1.0, "yanchor": "bottom", "x": 1, "xanchor": "right"},
+        updatemenus=[{
+            "type": "buttons",
+            "direction": "left",
+            "x": 0,
+            "xanchor": "left",
+            "y": 1.09,
+            "yanchor": "bottom",
+            "pad": {"r": 6},
+            "showactive": False,
+            "buttons": [
+                {"label": "▶ Reproducir", "method": "animate", "args": [None, reproducir]},
+                {"label": "⏸ Pausa", "method": "animate", "args": [[None], cuadro_inmediato]},
+                {"label": "⏮ Inicio", "method": "animate", "args": [[str(gens[0])], cuadro_inmediato]},
+            ],
+        }],
+        sliders=[{
+            "active": 0,
+            "x": 0,
+            "len": 1,
+            "y": 0,
+            "yanchor": "top",
+            "pad": {"t": 70},
+            "currentvalue": {"prefix": "Generación: "},
+            "steps": [
+                {"label": str(gen), "method": "animate", "args": [[str(gen)], cuadro_inmediato]}
+                for gen in gens
+            ],
+        }],
+    )
+    fig.update_xaxes(title_text="x", range=list(resultado["bounds"]), row=1, col=1)
+    fig.update_yaxes(title_text="f(x)", range=[y_min - y_margen, y_max + y_margen], row=1, col=1)
+    fig.update_xaxes(title_text="Generación", range=[-0.5, total_gens + 0.5], row=2, col=1)
+    fig.update_yaxes(title_text="Mejor f(x)", row=2, col=1)
+    return fig
+
+
+def mostrar_resultados(resultado, recien_ejecutado, duracion_ms):
+    """
+    Dibuja los resultados guardados en session_state: la animación
+    (se reproduce en el navegador), las métricas y el botón para limpiar.
     """
     total_gens = len(resultado["history"]) - 1
     a, b = resultado["bounds"]
-    animar = recien_ejecutado and animar
 
-    # La gráfica va primero, pero las métricas se llenan antes de animar
-    # para que el resultado se vea mientras corre la animación
-    zona_grafica = st.container()
-    zona_metricas = st.container()
+    if recien_ejecutado:
+        st.success("Simulación completada. Pulsa **▶ Reproducir** para ver la evolución.", icon="✅")
 
-    with zona_metricas:
-        st.caption(
-            f"Resultados para f(x) = `{resultado['expr']}` en [{a}, {b}]"
-            f"  ·  semilla: {resultado['semilla']}"
-        )
+    st.plotly_chart(
+        figura_animacion(resultado, duracion_ms),
+        width="stretch",
+        key=f"animacion_{resultado['id']}",
+        config={"displaylogo": False},
+    )
 
-        col1, col2, col3 = st.columns(3)
+    st.caption(
+        f"Resultados para f(x) = `{resultado['expr']}` en [{a}, {b}]"
+        f"  ·  semilla: {resultado['semilla']}"
+    )
 
-        with col1:
-            st.metric("Mejor x encontrado", format_value(resultado["best_x"]))
+    col1, col2, col3 = st.columns(3)
 
-        with col2:
-            st.metric("Mejor f(x)", format_value(resultado["best_f"]))
+    with col1:
+        st.metric("Mejor x encontrado", format_value(resultado["best_x"]))
 
-        with col3:
-            st.metric("Generaciones evaluadas", str(total_gens))
+    with col2:
+        st.metric("Mejor f(x)", format_value(resultado["best_f"]))
 
-    with zona_grafica:
-        figura = crear_figura(resultado)
-        imagen = st.empty()
-        estado = st.empty()
-
-        if animar:
-            progress_bar = st.progress(0)
-            frames = np.unique(
-                np.linspace(0, total_gens, min(total_gens + 1, MAX_FRAMES_ANIMACION)).round().astype(int)
-            )
-
-            for i, gen in enumerate(frames):
-                imagen.image(
-                    renderizar_generacion(figura, resultado, gen),
-                    output_format="PNG",
-                    width="stretch",
-                )
-                estado.text(texto_estado(resultado, gen))
-                progress_bar.progress((i + 1) / len(frames))
-
-                # Pausa para controlar velocidad de animación
-                time.sleep(frame_delay / 1000)
-
-            progress_bar.empty()
-
-        if recien_ejecutado:
-            st.success("Simulación completada.", icon="✅")
-
-        # La key cambia en cada ejecución para que el slider arranque en la última generación
-        gen = st.slider(
-            "Explorar generación",
-            min_value=0,
-            max_value=total_gens,
-            value=total_gens,
-            key=f"gen_{resultado['id']}",
-            help="Muestra la población de cualquier generación sin repetir la animación. "
-            "La generación 0 es la población inicial.",
-        )
-
-        if not animar:
-            imagen.image(
-                renderizar_generacion(figura, resultado, gen),
-                output_format="PNG",
-                width="stretch",
-            )
-            estado.text(texto_estado(resultado, gen))
-
-        plt.close(figura[0])
-
-    # -------------------------------------------------------
-    # Gráfica extra: evolución del mejor histórico
-    # -------------------------------------------------------
-    st.subheader("📉 Evolución del mejor valor encontrado")
-
-    best_values = [best_f_hist for _, best_f_hist in resultado["best_history"]]
-
-    fig2, ax2 = plt.subplots(figsize=(10, 4))
-    ax2.plot(best_values, marker="o", linewidth=1.5)
-    ax2.axvline(gen, color="gray", linestyle=":", alpha=0.8)
-    ax2.set_xlabel("Generación")
-    ax2.set_ylabel("Mejor f(x) histórico")
-    ax2.grid(True, linestyle="--", alpha=0.4)
-    st.pyplot(fig2)
-    plt.close(fig2)
+    with col3:
+        st.metric("Generaciones evaluadas", str(total_gens))
 
     st.button("🗑️ Limpiar resultados", width="stretch", on_click=limpiar_resultados)
 
@@ -571,22 +570,14 @@ with st.sidebar.expander("🔧 Avanzado"):
 
 st.sidebar.subheader("🎞️ Visualización")
 
-animar = st.sidebar.checkbox(
-    "Animar la evolución",
-    value=True,
-    key="animar",
-    help="Desactívalo para ver el resultado final de inmediato "
-    "(puedes recorrer las generaciones con el control de abajo de la gráfica).",
-)
-
 velocidad = st.sidebar.radio(
-    "Velocidad",
+    "Velocidad de la animación",
     list(VELOCIDADES),
     index=1,
     horizontal=True,
     key="velocidad",
-    disabled=not animar,
-    help=f"Se muestran como máximo {MAX_FRAMES_ANIMACION} generaciones.",
+    help="Velocidad del botón ▶ Reproducir de la gráfica. "
+    f"Se muestran como máximo {MAX_FRAMES_ANIMACION} generaciones.",
 )
 
 
@@ -732,8 +723,7 @@ if resultado is not None and resultado["problema"] == problema_actual:
     mostrar_resultados(
         resultado,
         recien_ejecutado=recien_ejecutado,
-        animar=animar,
-        frame_delay=VELOCIDADES[velocidad],
+        duracion_ms=VELOCIDADES[velocidad],
     )
 
 else:
@@ -746,9 +736,10 @@ else:
         )
 
     if problema is not None:
-        st.image(
-            imagen_vista_previa(*problema_actual),
+        st.plotly_chart(
+            figura_vista_previa(problema, *problema_actual),
             width="stretch",
+            config={"displaylogo": False},
         )
 
 
@@ -765,7 +756,9 @@ with st.expander("ℹ️ Cómo usar el simulador", expanded=False):
         2. **Ajusta el dominio** [a, b]. La fórmula interpretada aparece debajo; si hay un
            error, se indica ahí mismo.
         3. Revisa la **vista previa** de la curva y pulsa **▶️ Ejecutar simulación**.
-        4. Ajusta los parámetros del algoritmo y la animación en la **barra lateral**.
+        4. Pulsa **▶ Reproducir** en la gráfica para ver la evolución; **⏸ Pausa** la detiene
+           y **⏮ Inicio** vuelve a la generación 0.
+        5. Ajusta los parámetros del algoritmo y la velocidad de la animación en la **barra lateral**.
 
         **Sintaxis:** {AYUDA_SINTAXIS}
 
@@ -773,7 +766,9 @@ with st.expander("ℹ️ Cómo usar el simulador", expanded=False):
         - Los puntos representan la población.
         - La estrella representa el mejor valor histórico encontrado.
         - La generación 0 es la población inicial.
-        - El control *Explorar generación* permite revisar cualquier generación.
+        - El control *Generación* debajo de la gráfica permite revisar cualquier generación;
+          el círculo en la gráfica de convergencia marca la generación mostrada.
+        - Al pasar el mouse sobre un punto se ven sus valores de x y f(x).
         - Los resultados se conservan hasta la siguiente simulación o hasta pulsar *Limpiar resultados*.
           Si cambias un parámetro, aparece un aviso para volver a ejecutar.
         """
@@ -884,9 +879,9 @@ with st.expander("🧬 Fundamento teórico del algoritmo genético", expanded=Fa
       Para una misma semilla y los mismos parámetros, la ejecución produce la misma trayectoria evolutiva.  
       Si se desactiva *Fijar semilla aleatoria*, cada ejecución sigue una trayectoria distinta.
 
-    - **Animación y velocidad** (barra lateral → Visualización)  
-      Permiten activar o desactivar la animación y elegir su velocidad: lenta, normal o rápida.  
-      Solo modifican la representación visual del proceso evolutivo; no alteran el comportamiento del algoritmo.  
+    - **Velocidad de la animación** (barra lateral → Visualización)
+      Define la rapidez del botón ▶ Reproducir: lenta, normal o rápida.
+      Solo modifica la representación visual del proceso evolutivo; no altera el comportamiento del algoritmo.
       Si hay más de 100 generaciones, la animación muestra 100 de ellas espaciadas uniformemente.
 
     ## Interpretación de la visualización
@@ -895,7 +890,8 @@ with st.expander("🧬 Fundamento teórico del algoritmo genético", expanded=Fa
     - Los **puntos** representan la población en una generación dada.
     - La **estrella** señala el mejor individuo histórico encontrado hasta ese instante.
     - La gráfica de evolución complementaria muestra la sucesión del mejor valor histórico de $ f(x) $ a lo largo de las generaciones.
-    - El control **Explorar generación** permite revisar cualquier generación sin repetir la animación; la línea punteada de la gráfica de evolución marca la generación seleccionada.
+    - Los botones **▶ Reproducir**, **⏸ Pausa** y **⏮ Inicio** controlan la animación, que se reproduce en el navegador.
+    - El control **Generación** permite revisar cualquier generación; el círculo de la gráfica de evolución marca la generación mostrada.
 
     ## Observación metodológica
     El algoritmo genético es un método heurístico y estocástico.  
